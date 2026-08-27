@@ -1,4 +1,29 @@
 var TARGET_SPREADSHEET_ID = "16c9tIKBftKQmoxct2m4s54oXeYpKiqjEFJker1FbsZE";
+var TARGET_DRIVE_FOLDER_ID = "1fQs125ObjXrZynPVkEIK0a1cRWYapuLG";
+
+function getSpreadsheet() {
+  try {
+    if (TARGET_SPREADSHEET_ID) {
+      return SpreadsheetApp.openById(TARGET_SPREADSHEET_ID);
+    }
+  } catch(e) {}
+  return SpreadsheetApp.getActiveSpreadsheet() || SpreadsheetApp.create("Base de Datos - Biblioteca GOSCh");
+}
+
+function obtenerCarpetaDestino() {
+  try {
+    return DriveApp.getFolderById(TARGET_DRIVE_FOLDER_ID);
+  } catch(e) {
+    var carpetas = DriveApp.getFoldersByName("Biblioteca Virtual GOSCH");
+    if (carpetas.hasNext()) {
+      return carpetas.next();
+    } else {
+      var nueva = DriveApp.createFolder("Biblioteca Virtual GOSCH");
+      nueva.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      return nueva;
+    }
+  }
+}
 
 /**
  * Biblioteca Virtual GOSCh - Google Apps Script Backend
@@ -53,30 +78,14 @@ function include(filename) {
 /**
  * Obtiene o crea la carpeta principal en Google Drive
  */
-function obtenerCarpetaDestino() {
-  // Usar el ID específico del folder del proyecto en Drive para asegurar consistencia
-  var folderId = "1fQs125ObjXrZynPVkEIK0a1cRWYapuLG";
-  try {
-    return DriveApp.getFolderById(folderId);
-  } catch(e) {
-    // Si falla o no se tiene acceso directo, buscar por nombre o crear nueva carpeta
-    var carpetas = DriveApp.getFoldersByName(CONFIG.FOLDER_NAME);
-    if (carpetas.hasNext()) {
-      return carpetas.next();
-    } else {
-      var nuevaCarpeta = DriveApp.createFolder(CONFIG.FOLDER_NAME);
-      nuevaCarpeta.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      return nuevaCarpeta;
-    }
-  }
-}
+
 
 /**
  * Escanea la carpeta en Drive y registra libros nuevos en Google Sheets
  */
 function sincronizarLibrosConDrive() {
   try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Libros");
     if (!sheet) {
       inicializarBaseDatos();
@@ -203,7 +212,7 @@ function sincronizarLibrosConDrive() {
  * Inicializa las tablas en la hoja de cálculo activa si no existen
  */
 function inicializarBaseDatos() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ss = getSpreadsheet();
   if (!ss) {
     // Si se ejecuta standalone, crea una nueva hoja de cálculo
     ss = SpreadsheetApp.create("Base de Datos - Biblioteca GOSCh");
@@ -425,7 +434,7 @@ function registrarUsuario(nombre, apellido, email, grado, pin) {
 function loginUsuario(email, pin) {
   try {
     inicializarBaseDatos();
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Usuarios");
     var data = sheet.getDataRange().getValues();
     
@@ -497,7 +506,7 @@ function loginUsuario(email, pin) {
  */
 function validarSesion(email) {
   try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Usuarios");
     var data = sheet.getDataRange().getValues();
     
@@ -523,7 +532,7 @@ function obtenerLibros(email) {
       return { success: false, message: "Sesión no válida o no autorizada." };
     }
     
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     
     // 1. Obtener grado del usuario
     var sheetUsuarios = ss.getSheetByName("Usuarios");
@@ -705,7 +714,7 @@ function subirLibro(fileData, fileName, fileType, titulo, autor, categoria, form
     var downloadUrl = "https://drive.google.com/uc?export=download&id=" + fileId;
     
     // Registrar en la hoja de cálculo
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Libros");
     var nuevoLibroId = "LIB" + Utilities.formatDate(new Date(), "GMT", "yyyyMMddHHmmss");
     var fechaSubida = new Date();
@@ -763,7 +772,7 @@ function registrarActividad(email, grado, accion, libroId, libroTitulo, categori
   try {
     if (!validarSesion(email)) return { success: false };
     
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheetHistorial = ss.getSheetByName("Historial");
     var actId = "ACT" + Utilities.formatDate(new Date(), "GMT", "yyyyMMddHHmmssSSS");
     
@@ -779,7 +788,7 @@ function registrarActividad(email, grado, accion, libroId, libroTitulo, categori
  */
 function buscarResena(titulo, autor) {
   try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Libros");
     
     var tipoDocSheet = "";
@@ -956,7 +965,7 @@ function generarComentarioEsoterico(titulo, categoria, descripcion) {
 function obtenerDatosEntrenamiento() {
   try {
     inicializarBaseDatos();
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Historial");
     
     if (!sheet) return [];
@@ -1097,7 +1106,7 @@ function solicitarTema(email, tema) {
     if (!validarSesion(email)) {
       return { success: false, message: "Sesión no válida o no autorizada." };
     }
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Temas");
     if (!sheet) {
       sheet = ss.insertSheet("Temas");
@@ -1129,7 +1138,7 @@ function solicitarTema(email, tema) {
  */
 function obtenerCategorias() {
   try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Temas");
     
     var categorias = [
@@ -1176,7 +1185,7 @@ function obtenerCategorias() {
  */
 function obtenerTemasSugeridos() {
   try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Temas");
     var sugeridos = [];
     if (sheet) {
@@ -1206,7 +1215,7 @@ function eliminarDocumento(email, libroId) {
     }
     
     var emailClean = email.toLowerCase();
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheetUsuarios = ss.getSheetByName("Usuarios");
     var esAdmin = verificarEsAdmin(email);
     
@@ -1269,7 +1278,7 @@ function solicitarInstruccionServidor(email, title, reason, grado) {
     if (!validarSesion(email)) {
       return { success: false, message: "Sesión no válida o no autorizada." };
     }
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("SolicitudesInstruccion");
     if (!sheet) {
       sheet = ss.insertSheet("SolicitudesInstruccion");
@@ -1314,7 +1323,7 @@ function verificarEsAdmin(email) {
     return true;
   }
   try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Usuarios");
     if (sheet) {
       var data = sheet.getDataRange().getValues();
@@ -1343,7 +1352,7 @@ function obtenerMiembros(email) {
     if (!validarSesion(email) || !verificarEsAdmin(email)) {
       return { success: false, message: "Acceso denegado: No está autorizado para realizar esta acción." };
     }
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Usuarios");
     var miembros = [];
     if (sheet) {
@@ -1374,7 +1383,7 @@ function actualizarEstadoMiembro(email, miembroEmail, nuevoEstado) {
     if (!validarSesion(email) || !verificarEsAdmin(email)) {
       return { success: false, message: "No autorizado." };
     }
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Usuarios");
     if (sheet) {
       var data = sheet.getDataRange().getValues();
@@ -1402,7 +1411,7 @@ function eliminarMiembro(email, miembroEmail) {
     if (miembroEmail.toLowerCase() === email.toLowerCase()) {
       return { success: false, message: "No puede eliminarse a sí mismo." };
     }
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Usuarios");
     if (sheet) {
       var data = sheet.getDataRange().getValues();
@@ -1425,7 +1434,7 @@ function eliminarMiembro(email, miembroEmail) {
 function obtenerPrestamos() {
   try {
     inicializarBaseDatos();
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Prestamos");
     if (!sheet) return { success: true, prestamos: [] };
     
@@ -1460,7 +1469,7 @@ function registrarPrestamo(email, libroFisico, hermanoEmail, hermanoNombre, dias
     }
     
     inicializarBaseDatos();
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Prestamos");
     if (!sheet) return { success: false, message: "La hoja de préstamos no existe." };
     
@@ -1505,7 +1514,7 @@ function devolverPrestamo(email, prestamoId) {
     }
     
     inicializarBaseDatos();
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Prestamos");
     if (!sheet) return { success: false, message: "La hoja de préstamos no existe." };
     
@@ -1558,7 +1567,7 @@ function actualizarGradoMiembro(email, miembroEmail, nuevoGrado) {
       return { success: false, message: "Operación denegada: Solo el Administrador Supremo puede reasignar grados." };
     }
     
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Usuarios");
     if (sheet) {
       var data = sheet.getDataRange().getValues();
@@ -1600,7 +1609,7 @@ function actualizarRolMiembro(email, miembroEmail, nuevoRol) {
       return { success: false, message: "Operación denegada: Solo el Administrador Supremo puede reasignar roles de administración." };
     }
     
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Usuarios");
     if (sheet) {
       var data = sheet.getDataRange().getValues();
