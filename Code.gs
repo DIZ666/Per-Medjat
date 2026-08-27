@@ -128,22 +128,35 @@ function doPost(e) {
 function manejarPeticionApi(action, params) {
   var resultado = { success: false, message: "Acción no reconocida." };
   try {
+    params = params || {};
+    var email = params.email || "";
+
     if (action === "login") {
       resultado = loginUsuario(params.email, params.pin);
     } else if (action === "register") {
       resultado = registrarUsuario(params.nombre, params.apellido, params.email, params.grado, params.pin);
     } else if (action === "getBooks") {
-      resultado = obtenerLibros(params.email);
+      resultado = obtenerLibros(email);
     } else if (action === "getCalendar") {
-      resultado = obtenerEventosCalendario(params.email);
+      resultado = obtenerEventosCalendario(email);
     } else if (action === "getNews") {
-      resultado = obtenerNoticiasOrden(params.email);
+      resultado = obtenerNoticiasOrden(email);
     } else if (action === "uploadBook") {
       resultado = subirLibro(
         params.fileData, params.fileName, params.fileType,
         params.titulo, params.autor, params.categoria, params.formato,
-        params.email, params.grado, params.gradoRequerido, params.tipoDocumento
+        email, params.grado, params.gradoRequerido, params.tipoDocumento
       );
+    } else if (action === "addEvent") {
+      resultado = publicarEventoCalendario(email, params.evento || params);
+    } else if (action === "addNews") {
+      resultado = publicarNoticiaOrden(email, params.noticia || params);
+    } else if (action === "deleteEvent") {
+      resultado = eliminarEventoCalendario(email, params.id);
+    } else if (action === "deleteNews") {
+      resultado = eliminarNoticiaOrden(email, params.id);
+    } else if (action === "deleteBook") {
+      resultado = eliminarDocumento(email, params.id, params.titulo);
     }
   } catch (eApi) {
     resultado = { success: false, message: "Error en API: " + eApi.message };
@@ -151,6 +164,50 @@ function manejarPeticionApi(action, params) {
 
   return ContentService.createTextOutput(JSON.stringify(resultado))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Elimina un evento de la hoja Calendario
+ */
+function eliminarEventoCalendario(email, id) {
+  try {
+    if (!validarSesion(email)) return { success: false, message: "Sesión no autorizada." };
+    var ss = getSpreadsheet();
+    var sheet = ss.getSheetByName("Calendario");
+    if (!sheet) return { success: false, message: "Hoja Calendario no encontrada." };
+    var data = sheet.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][0] && data[i][0].toString() === id.toString()) {
+        sheet.deleteRow(i + 1);
+        return { success: true, message: "Evento eliminado." };
+      }
+    }
+    return { success: false, message: "Evento no encontrado." };
+  } catch(e) {
+    return { success: false, message: "Error: " + e.message };
+  }
+}
+
+/**
+ * Elimina una noticia de la hoja Noticias
+ */
+function eliminarNoticiaOrden(email, id) {
+  try {
+    if (!validarSesion(email)) return { success: false, message: "Sesión no autorizada." };
+    var ss = getSpreadsheet();
+    var sheet = ss.getSheetByName("Noticias");
+    if (!sheet) return { success: false, message: "Hoja Noticias no encontrada." };
+    var data = sheet.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][0] && data[i][0].toString() === id.toString()) {
+        sheet.deleteRow(i + 1);
+        return { success: true, message: "Noticia eliminada." };
+      }
+    }
+    return { success: false, message: "Noticia no encontrada." };
+  } catch(e) {
+    return { success: false, message: "Error: " + e.message };
+  }
 }
 
 /**
