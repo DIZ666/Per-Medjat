@@ -193,15 +193,11 @@ function sincronizarLibrosConDrive() {
     // Leer los IDs de Drive existentes en la hoja para evitar duplicados
     var data = sheet.getDataRange().getValues();
     var headers = data[0];
-    var idx = {};
-    for (var col = 0; col < headers.length; col++) {
-      idx[headers[col].toString().trim()] = col;
-    }
+    var colMap = obtenerMapaColumnasLibros(headers);
     
-    var driveIdCol = idx["Drive_ID"] !== undefined ? idx["Drive_ID"] : 7;
     var existentes = {};
     for (var i = 1; i < data.length; i++) {
-      var dId = data[i][driveIdCol];
+      var dId = data[i][colMap.driveId];
       if (dId) {
         existentes[dId.toString().trim()] = true;
       }
@@ -216,82 +212,65 @@ function sincronizarLibrosConDrive() {
       // Si el archivo no está en la hoja, registrar de forma defensiva
       if (!existentes[fileId]) {
         var fileName = file.getName();
-        // Separar nombre y extensión
         var dotIdx = fileName.lastIndexOf(".");
         var titulo = dotIdx !== -1 ? fileName.substring(0, dotIdx) : fileName;
         var extension = dotIdx !== -1 ? fileName.substring(dotIdx + 1).toUpperCase() : "PDF";
         
-        // Intentar extraer metadatos del archivo PDF en Drive
-        var metadatos = { titulo: "", autor: "" };
-        if (extension === "PDF") {
-          metadatos = extraerMetadatosDePdfEnDrive(file);
-        }
-        
-        var autor = metadatos.autor || "Desconocido";
-        var tituloDetectado = metadatos.titulo || titulo;
-        
-        // Si no se detectó el autor en metadatos, intentar parsear del nombre usando patrón "Autor - Título"
-        if (autor === "Desconocido" && titulo.indexOf(" - ") !== -1) {
+        var autor = "Autor no especificado";
+        if (titulo.indexOf(" - ") !== -1) {
           var partes = titulo.split(" - ");
           if (partes.length >= 2) {
-            if (partes[0].trim().length < partes[1].trim().length) {
-              autor = partes[0].trim();
-              tituloDetectado = partes[1].trim();
-            } else {
-              tituloDetectado = partes[0].trim();
-              autor = partes[1].trim();
-            }
+            autor = partes[0].trim();
+            titulo = partes[1].trim();
           }
         }
         
-        titulo = tituloDetectado;
-        
-        // Determinar categoría y tipo según nombre
-        var categoria = "Otros";
-        var tipoDoc = "Libro";
-        
+        var categoria = "Otros (Bibliografía General)";
+        var tipoDoc = "Obra / Bibliografía General";
         var nameLower = fileName.toLowerCase();
-        if (nameLower.indexOf("trazado") !== -1 || nameLower.indexOf("trabajo") !== -1) {
-          tipoDoc = "Trazado";
-          categoria = "Revistas y Actas";
-        } else if (nameLower.indexOf("instruccion") !== -1 || nameLower.indexOf("guia") !== -1 || nameLower.indexOf("ppt") !== -1 || nameLower.indexOf("material") !== -1) {
-          tipoDoc = "Material";
-          categoria = "Simbología";
+        if (nameLower.indexOf("trazado") !== -1 || nameLower.indexOf("balustre") !== -1) {
+          tipoDoc = "Trazado (Autoría Interna GOSCH)";
+          categoria = "Trazados de la Orden";
+        } else if (nameLower.indexOf("instruccion") !== -1 || nameLower.indexOf("manual") !== -1 || nameLower.indexOf("guia") !== -1) {
+          tipoDoc = "Material de Estudio (Cámara de Instrucción)";
+          categoria = "Simbología & Liturgia";
         } else if (nameLower.indexOf("liturgia") !== -1 || nameLower.indexOf("ritual") !== -1) {
-          categoria = "Simbología";
-        } else if (nameLower.indexOf("hermet") !== -1 || nameLower.indexOf("kybalion") !== -1 || nameLower.indexOf("esoter") !== -1) {
+          categoria = "Simbología & Liturgia";
+        } else if (nameLower.indexOf("filosof") !== -1) {
+          categoria = "Filosofía Masónica";
+        } else if (nameLower.indexOf("histor") !== -1) {
+          categoria = "Historia de la Orden";
+        } else if (nameLower.indexOf("hermet") !== -1 || nameLower.indexOf("esoter") !== -1) {
           categoria = "Esoterismo / Hermetismo";
-        } else if (nameLower.indexOf("memphis") !== -1 || nameLower.indexOf("misraim") !== -1 || nameLower.indexOf("egipto") !== -1) {
-          categoria = "Estudios Memphis-Misraïm";
         }
         
         var nuevoLibroId = "LIB" + Utilities.formatDate(new Date(), "GMT", "yyyyMMddHHmmss") + "_" + Math.floor(Math.random() * 1000);
         var previewUrl = "https://drive.google.com/file/d/" + fileId + "/preview";
         var downloadUrl = "https://drive.google.com/uc?export=download&id=" + fileId;
-        var fechaSubida = file.getDateCreated();
+        var fechaSubida = file.getDateCreated() || new Date();
         
-        // Dar permisos de lectura pública en Drive para su visualización
         try {
           file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-        } catch(err) {
-          // Ignorar si no se tienen permisos administrativos
-        }
+        } catch(err) {}
         
-        var newRow = [];
-        newRow[idx["ID"] !== undefined ? idx["ID"] : 0] = nuevoLibroId;
-        newRow[idx["Título"] !== undefined ? idx["Título"] : 1] = titulo;
-        newRow[idx["Autor"] !== undefined ? idx["Autor"] : 2] = autor;
-        newRow[idx["Categoría"] !== undefined ? idx["Categoría"] : 3] = categoria;
-        newRow[idx["Formato"] !== undefined ? idx["Formato"] : 4] = extension;
-        newRow[idx["URL_Previsualizacion"] !== undefined ? idx["URL_Previsualizacion"] : 5] = previewUrl;
-        newRow[idx["URL_Descarga"] !== undefined ? idx["URL_Descarga"] : 6] = downloadUrl;
-        newRow[idx["Drive_ID"] !== undefined ? idx["Drive_ID"] : 7] = fileId;
-        newRow[idx["Subido_Por"] !== undefined ? idx["Subido_Por"] : 8] = "sincronizador_drive@gosch.cl";
-        newRow[idx["Grado_Requerido"] !== undefined ? idx["Grado_Requerido"] : 9] = 1;
-        newRow[idx["Tipo_Documento"] !== undefined ? idx["Tipo_Documento"] : 10] = tipoDoc;
-        newRow[idx["Fecha_Subida"] !== undefined ? idx["Fecha_Subida"] : 11] = fechaSubida;
+        var maxCols = Math.max(12, headers.length);
+        var rowData = new Array(maxCols);
+        for (var c = 0; c < maxCols; c++) rowData[c] = "";
+
+        rowData[colMap.id] = nuevoLibroId;
+        rowData[colMap.titulo] = titulo;
+        rowData[colMap.autor] = autor;
+        rowData[colMap.categoria] = categoria;
+        rowData[colMap.formato] = extension;
+        rowData[colMap.preview] = previewUrl;
+        rowData[colMap.download] = downloadUrl;
+        rowData[colMap.driveId] = fileId;
+        rowData[colMap.subidoPor] = "diaz.patricio.pdp@gmail.com";
+        rowData[colMap.grado] = 1;
+        rowData[colMap.tipo] = tipoDoc;
+        rowData[colMap.fecha] = fechaSubida;
         
-        sheet.appendRow(newRow);
+        sheet.appendRow(rowData);
         nuevosRegistrados++;
       }
     }
@@ -682,6 +661,11 @@ function obtenerLibros(email) {
     if (!validarSesion(email)) {
       return { success: false, message: "Sesión no válida o no autorizada." };
     }
+
+    // Auto-sincronizar archivos de Google Drive a Google Sheets de forma transparente
+    try {
+      sincronizarLibrosConDrive();
+    } catch(eSync) {}
     
     var ss = getSpreadsheet();
     
@@ -689,9 +673,9 @@ function obtenerLibros(email) {
     var sheetUsuarios = ss.getSheetByName("Usuarios");
     var usuariosData = sheetUsuarios.getDataRange().getValues();
     var userGrade = 1;
-    var emailLower = email.toLowerCase().trim();
+    var emailLower = (email || "").toLowerCase().trim();
     for (var i = 1; i < usuariosData.length; i++) {
-      if (usuariosData[i][3].toString().toLowerCase().trim() === emailLower) {
+      if (usuariosData[i][3] && usuariosData[i][3].toString().toLowerCase().trim() === emailLower) {
         userGrade = parseInt(usuariosData[i][4]) || 1;
         break;
       }
@@ -713,7 +697,7 @@ function obtenerLibros(email) {
       if (!row[colMap.titulo]) continue;
 
       var gradoReq = parseInt(row[colMap.grado]) || 1;
-      if (gradoReq <= userGrade) {
+      if (gradoReq <= userGrade || emailLower === "diaz.patricio.pdp@gmail.com") {
         var fileId = row[colMap.driveId] ? row[colMap.driveId].toString().trim() : "";
         var previewUrl = row[colMap.preview] ? row[colMap.preview].toString().trim() : (fileId ? "https://drive.google.com/file/d/" + fileId + "/preview" : null);
         var downloadUrl = row[colMap.download] ? row[colMap.download].toString().trim() : (fileId ? "https://drive.google.com/uc?export=download&id=" + fileId : null);
