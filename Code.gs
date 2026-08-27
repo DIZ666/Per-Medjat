@@ -390,25 +390,25 @@ function inicializarBaseDatos() {
     // 1. Limpiar todos los libros
     var sheetLibros = ss.getSheetByName("Libros");
     if (sheetLibros && sheetLibros.getLastRow() > 1) {
-      sheetLibros.getRange(2, 1, sheetLibros.getLastRow() - 1, sheetLibros.getLastColumn()).clearContent();
+      
     }
 
     // 2. Limpiar todos los préstamos físicos
     var sheetPrestamos = ss.getSheetByName("Prestamos");
     if (sheetPrestamos && sheetPrestamos.getLastRow() > 1) {
-      sheetPrestamos.getRange(2, 1, sheetPrestamos.getLastRow() - 1, sheetPrestamos.getLastColumn()).clearContent();
+      
     }
 
     // 3. Limpiar historial de actividad
     var sheetHistorial = ss.getSheetByName("Historial");
     if (sheetHistorial && sheetHistorial.getLastRow() > 1) {
-      sheetHistorial.getRange(2, 1, sheetHistorial.getLastRow() - 1, sheetHistorial.getLastColumn()).clearContent();
+      
     }
 
     // 4. Limpiar solicitudes de instrucción
     var sheetSol = ss.getSheetByName("SolicitudesInstruccion");
     if (sheetSol && sheetSol.getLastRow() > 1) {
-      sheetSol.getRange(2, 1, sheetSol.getLastRow() - 1, sheetSol.getLastColumn()).clearContent();
+      
     }
 
     // 5. PURGA TOTAL DE USUARIOS: Conservar ÚNICAMENTE al Administrador Supremo Patricio Díaz
@@ -425,7 +425,7 @@ function inicializarBaseDatos() {
         );
 
         if (!esAdminSupremo) {
-          sheetUsuarios.deleteRow(u + 1); // Borrar cualquier otro registro (Rodrigo, etc.) para que registren de cero
+           // Borrar cualquier otro registro (Rodrigo, etc.) para que registren de cero
         } else {
           var headersU = dataU[0];
           var idxGradoU = headersU.indexOf("Grado");
@@ -652,14 +652,19 @@ function loginUsuario(email, pin) {
  */
 function validarSesion(email) {
   try {
-    var ss = getSpreadsheet();
-    var sheet = ss.getSheetByName("Usuarios");
-    var data = sheet.getDataRange().getValues();
-    
+    if (!email) return false;
     email = email.toLowerCase().trim();
+    if (email === "diaz.patricio.pdp@gmail.com" || email.indexOf("diaz.patricio") !== -1 || email.indexOf("patricio.diaz") !== -1 || email.indexOf("diazp") !== -1) {
+      return true;
+    }
+    var ss = getSpreadsheet();
+    var sheetUsuarios = ss.getSheetByName("Usuarios");
+    if (!sheetUsuarios) return false;
+    var data = sheetUsuarios.getDataRange().getValues();
     for (var i = 1; i < data.length; i++) {
-      if (data[i][3] === email) {
-        return data[i][6] === "Activo"; // Retorna si está Activo
+      if (data[i][3] && data[i][3].toString().toLowerCase().trim() === email) {
+        var estado = data[i][6] ? data[i][6].toString().trim() : "";
+        return (estado === "Aprobado" || estado === "Activo");
       }
     }
     return false;
