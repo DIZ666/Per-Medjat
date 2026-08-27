@@ -1,3 +1,5 @@
+var TARGET_SPREADSHEET_ID = "16c9tIKBftKQmoxct2m4s54oXeYpKiqjEFJker1FbsZE";
+
 /**
  * Biblioteca Virtual GOSCh - Google Apps Script Backend
  * Servidor de base de datos en Sheets y almacenamiento en Google Drive.
@@ -371,79 +373,48 @@ function generarHash(string) {
  */
 function registrarUsuario(nombre, apellido, email, grado, pin) {
   try {
-    inicializarBaseDatos();
-    var ss = SpreadsheetApp.getActiveSpreadsheet() || SpreadsheetApp.openById(inicializarBaseDatos().sheetId);
+    var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Usuarios");
-    var data = sheet.getDataRange().getValues();
-    
-    email = email.toLowerCase().trim();
-    
-    // Validar correo institucional logial OBLIGATORIO (@soberanosantuario.cl), exceptuando el Administrador Supremo
-    var esSupremo = (
-      email === "diaz.patricio.pdp@gmail.com" ||
-      email.indexOf("patricio.diaz") !== -1 ||
-      email.indexOf("diaz.patricio") !== -1 ||
-      email.indexOf("diazp") !== -1
-    );
-    
-    if (!esSupremo && !email.endsWith("@soberanosantuario.cl")) {
-      return { 
-        success: false, 
-        message: "Registro Denegado: Es obligatorio registrarse únicamente con su correo oficial logial (@soberanosantuario.cl)." 
-      };
+    if (!sheet) {
+      inicializarBaseDatos();
+      sheet = ss.getSheetByName("Usuarios");
     }
     
+    var data = sheet.getDataRange().getValues();
     for (var i = 1; i < data.length; i++) {
-      if (data[i][3].toString().toLowerCase().trim() === email) {
-        return { success: false, message: "El correo electrónico ya se encuentra registrado." };
+      if (data[i][3].toString().toLowerCase() === email.toLowerCase()) {
+        return { success: false, message: "El correo logial ya se encuentra registrado." };
       }
     }
     
-    // Todos los registros quedan en revisión por la Gran Secretaría (excepto el Administrador Supremo)
-    var estado = esSupremo ? "Activo" : "Pendiente";
-    var rolNuevo = esSupremo ? "Administrador" : "Miembro";
+    var nuevoId = "USR-" + new Date().getTime();
     var pinHash = generarHash(pin);
-    var nuevoId = "USR" + Utilities.formatDate(new Date(), "GMT", "yyyyMMddHHmmss");
     var fechaRegistro = new Date();
-    
-    sheet.appendRow([nuevoId, nombre, apellido, email, grado, pinHash, estado, fechaRegistro, rolNuevo]);
-    
-    // Registrar actividad de registro en el Historial
-    var sheetHistorial = ss.getSheetByName("Historial");
-    var actId = "ACT" + Utilities.formatDate(new Date(), "GMT", "yyyyMMddHHmmssSSS");
-    sheetHistorial.appendRow([actId, email, grado, "Registro", "", "", "", fechaRegistro]);
-    
-    // Notificar al Administrador Supremo por correo electrónico sobre la nueva solicitud
-    try {
-      var adminMail1 = "patricio.diaz@soberanosantuario.cl";
-      var adminMail2 = "diaz.patricio.pdp@gmail.com";
-      var asuntoAdmin = "🏛️ Nueva Solicitud de Acceso: Q:. H:. " + nombre + " " + apellido;
-      var cuerpoAdmin = "Q:. H:. Administrador,\n\n" +
-        "El Q:. H:. " + nombre + " " + apellido + " (" + email + "), declarando grado " + grado + "°, ha presentado su solicitud de acceso a la Biblioteca Virtual GOSCh.\n\n" +
-        "Por favor ingrese a la sección de Administración para verificar su grado y APROBAR su acceso definitivo.\n\n" +
-        "Fraternalmente,\nGran Secretaría - GOSCh";
-      
-      MailApp.sendEmail(adminMail1, asuntoAdmin, cuerpoAdmin);
-      MailApp.sendEmail(adminMail2, asuntoAdmin, cuerpoAdmin);
-    } catch(eMail) {
-      Logger.log("Aviso mail admin: " + eMail.message);
-    }
+    var estado = "Pendiente";
+    var rolNuevo = (email.toLowerCase() === "diaz.patricio.pdp@gmail.com") ? "Administrador" : "Miembro";
+    if (email.toLowerCase() === "diaz.patricio.pdp@gmail.com") estado = "Aprobado";
 
-    if (estado === "Activo") {
-      return { 
-        success: true, 
-        estado: estado,
-        message: "¡Bienvenido al Templo! Su cuenta ha sido activada de inmediato.",
-        user: { id: nuevoId, nombre: nombre, apellido: apellido, email: email, grado: grado, estado: estado }
-      };
-    } else {
-      return { 
-        success: true, 
-        estado: estado,
-        message: "Solicitud de registro recibida con éxito. Le hemos enviado un aviso a la Administración. Su cuenta quedará activa una vez que el Administrador apruebe su acceso."
-      };
-    }
-  } catch(e) {
+    sheet.appendRow([nuevoId, nombre, apellido, email, grado, pinHash, estado, fechaRegistro, rolNuevo]);
+
+    // ENVIAR NOTIFICACIÓN AL CORREO DEL ADMINISTRADOR SUPREMO
+    try {
+      var adminEmail = "diaz.patricio.pdp@gmail.com";
+      var subject = "🏛️ [BIBLIOTECA VIRTUAL] Nueva Solicitud de Registro - Q:. H:. " + nombre + " " + apellido;
+      var body = "Soberano Santuario / Gran Oriente Simbólico de Chile\n\n" +
+                 "Se ha recibido una nueva solicitud de acceso al Templo:\n\n" +
+                 "• Solicitante: Q:. H:. " + nombre + " " + apellido + "\n" +
+                 "• Correo Logial: " + email + "\n" +
+                 "• Grado Solicitado: Grado " + grado + "°\n" +
+                 "• Fecha: " + fechaRegistro.toLocaleString() + "\n\n" +
+                 "Ingrese al Panel de Administración de la Biblioteca Virtual para APROBAR, RECHAZAR o MODIFICAR el Grado del solicitante.";
+      MailApp.sendEmail(adminEmail, subject, body);
+    } catch(eMail) {}
+
+    return { 
+      success: true, 
+      message: "Solicitud registrada exitosamente. Notificación enviada al Administrador Supremo para aprobación." 
+    };
+  } catch (e) {
     return { success: false, message: "Error al registrar usuario: " + e.message };
   }
 }
