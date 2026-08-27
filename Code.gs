@@ -157,6 +157,16 @@ function manejarPeticionApi(action, params) {
       resultado = eliminarNoticiaOrden(email, params.id);
     } else if (action === "deleteBook") {
       resultado = eliminarDocumento(email, params.id, params.titulo);
+    } else if (action === "getUsers") {
+      resultado = obtenerMiembros(email);
+    } else if (action === "updateMemberStatus") {
+      resultado = actualizarEstadoMiembro(email, params.miembroEmail, params.nuevoEstado);
+    } else if (action === "removeMember") {
+      resultado = eliminarMiembro(email, params.miembroEmail);
+    } else if (action === "updateMemberGrade") {
+      resultado = actualizarGradoMiembro(email, params.miembroEmail, params.nuevoGrado);
+    } else if (action === "updateMemberRole") {
+      resultado = actualizarRolMiembro(email, params.miembroEmail, params.nuevoRol);
     }
   } catch (eApi) {
     resultado = { success: false, message: "Error en API: " + eApi.message };
@@ -519,6 +529,14 @@ function registrarUsuario(nombre, apellido, email, grado, pin) {
       sheet = ss.getSheetByName("Usuarios");
     }
     
+    var emailClean = (email || "").toLowerCase().trim();
+    if (emailClean !== "diaz.patricio.pdp@gmail.com" && !emailClean.endsWith("@soberanosantuario.cl")) {
+      return { 
+        success: false, 
+        message: "Acceso Denegado: Únicamente se permite el registro con el correo oficial logial (@soberanosantuario.cl)." 
+      };
+    }
+
     var data = sheet.getDataRange().getValues();
     for (var i = 1; i < data.length; i++) {
       if (data[i][3].toString().toLowerCase() === email.toLowerCase()) {
@@ -1533,6 +1551,7 @@ function obtenerMiembros(email) {
           email: data[i][3],
           grado: parseInt(data[i][4]) || 1,
           estado: data[i][6],
+          rol: data[i][8] ? data[i][8].toString() : "Miembro",
           registro: data[i][7] ? Utilities.formatDate(new Date(data[i][7]), Session.getScriptTimeZone() || "GMT-4", "yyyy-MM-dd HH:mm") : "N/A"
         });
       }

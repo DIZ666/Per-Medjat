@@ -1083,12 +1083,17 @@ function ejecutarAccionBackend(action, params, onSuccess, onError) {
     else if (action === "deleteEvent") runner.eliminarEventoCalendario(params.email, params.id);
     else if (action === "deleteNews") runner.eliminarNoticiaOrden(params.email, params.id);
     else if (action === "deleteBook") runner.eliminarDocumento(params.email, params.id, params.titulo);
+    else if (action === "getUsers") runner.obtenerMiembros(params.email);
+    else if (action === "updateMemberStatus") runner.actualizarEstadoMiembro(params.email, params.miembroEmail, params.nuevoEstado);
+    else if (action === "removeMember") runner.eliminarMiembro(params.email, params.miembroEmail);
+    else if (action === "updateMemberGrade") runner.actualizarGradoMiembro(params.email, params.miembroEmail, params.nuevoGrado);
+    else if (action === "updateMemberRole") runner.actualizarRolMiembro(params.email, params.miembroEmail, params.nuevoRol);
   } else {
     // Entorno GitHub Pages PWA / Navegador externo
     var payload = Object.assign({ action: action }, params);
     
     // Para lecturas de datos, usar GET directo con query params para máxima compatibilidad con redirecciones 302
-    if (action === "getBooks" || action === "getCalendar" || action === "getNews" || action === "login") {
+    if (action === "getBooks" || action === "getCalendar" || action === "getNews" || action === "getUsers") {
       var queryParts = [];
       for (var key in payload) {
         if (payload.hasOwnProperty(key)) {
@@ -1154,6 +1159,33 @@ window.cargarNoticiasOrdenDesdeServidor = function() {
   });
 };
 
+window.cargarUsuariosDesdeServidor = function(callback) {
+  if (!currentUser) { if (callback) callback(); return; }
+  ejecutarAccionBackend("getUsers", { email: currentUser.email }, function(res) {
+    if (res && res.success && res.miembros) {
+      baseUsuariosAdmin = res.miembros.map(function(m) {
+        var correo = String(m.email || "").toLowerCase();
+        var gradoNum = parseInt(m.grado) || 1;
+        var esSupremo = (correo === ADMIN_SUPREMO_EMAIL.toLowerCase());
+        var rol = esSupremo ? "Administrador" : (m.rol || "Miembro");
+        return {
+          id: m.id,
+          nombre: m.nombre,
+          apellido: m.apellido,
+          email: correo,
+          grado: gradoNum + "° Grado",
+          gradoNum: gradoNum,
+          rol: rol,
+          estado: (m.estado === "Activo") ? "Aprobado" : (m.estado || "Pendiente"),
+          fechaRegistro: m.registro || "Reciente",
+          isSupremeAdmin: esSupremo
+        };
+      });
+    }
+    if (callback) callback();
+  });
+};
+
 window.SafeStorage = {
   getItem: function(key) { try { return localStorage.getItem(key); } catch(e) { return null; } },
   setItem: function(key, val) { try { localStorage.setItem(key, val); } catch(e) {} },
@@ -1193,17 +1225,7 @@ let baseUsuariosAdmin = [
 let baseSolicitudesInstruccion = [];
 let baseSugerencias = [];
 
-let baseLibros = [
-  {
-    id: "lib-materia-mente",
-    titulo: "MATERIA Y MENTE",
-    autor: "Mario Bunge",
-    categoria: "Otros (Bibliografía General)",
-    grado: 1,
-    tipo: "Obra / Bibliografía General",
-    size: 5242880
-  }
-];
+let baseLibros = [];
 
 let filtroSubclasificacionActual = "TODOS";
 let tipoVistaActual = SafeStorage.getItem("gosch_view_mode") || "cards";
@@ -1273,7 +1295,9 @@ window.switchTab = function(tabName) {
   if (tabName === 'catalog') renderizarGridLibros(baseLibros);
   if (tabName === 'instruction') renderizarCamaraInstruccion();
   if (tabName === 'drawings') renderizarTrazadosDeLaOrden();
-  if (tabName === 'admin') window.renderizarAdminTabla();
+  if (tabName === 'admin') {
+    window.cargarUsuariosDesdeServidor(function() { window.renderizarAdminTabla(); });
+  }
   if (tabName === 'proposals') window.renderizarSugerencias();
   if (tabName === 'stats') {
     actualizarDashboardGraficos();
@@ -1677,11 +1701,16 @@ window.otorgarRolAdministrador = function(email) {
   }
 
   const usr = baseUsuariosAdmin.find(u => u.email === email);
-  if (usr) {
-    usr.rol = "Administrador";
-    alert("⭐ El Q:. H:. " + usr.nombre + " " + usr.apellido + " ha sido designado como ADMINISTRADOR DEL TEMPLO.");
-    window.renderizarAdminTabla();
-  }
+  if (!usr || !currentUser) return;
+  ejecutarAccionBackend("updateMemberRole", { email: currentUser.email, miembroEmail: email, nuevoRol: "Administrador" }, function(res) {
+    if (res && res.success) {
+      usr.rol = "Administrador";
+      alert("⭐ El Q:. H:. " + usr.nombre + " " + usr.apellido + " ha sido designado como ADMINISTRADOR DEL TEMPLO.");
+      window.renderizarAdminTabla();
+    } else {
+      alert("⚠️ No se pudo otorgar el rol: " + ((res && res.message) || "Error de servidor."));
+    }
+  }, function() { alert("⚠️ Error de conexión al otorgar el rol."); });
 };
 
 window.revocarRolAdministrador = function(email) {
@@ -1696,11 +1725,16 @@ window.revocarRolAdministrador = function(email) {
   }
 
   const usr = baseUsuariosAdmin.find(u => u.email === email);
-  if (usr) {
-    usr.rol = "Miembro";
-    alert("🔻 Se ha revocado el rol de Administrador al Q:. H:. " + usr.nombre + " " + usr.apellido + ".");
-    window.renderizarAdminTabla();
-  }
+  if (!usr || !currentUser) return;
+  ejecutarAccionBackend("updateMemberRole", { email: currentUser.email, miembroEmail: email, nuevoRol: "Miembro" }, function(res) {
+    if (res && res.success) {
+      usr.rol = "Miembro";
+      alert("🔻 Se ha revocado el rol de Administrador al Q:. H:. " + usr.nombre + " " + usr.apellido + ".");
+      window.renderizarAdminTabla();
+    } else {
+      alert("⚠️ No se pudo revocar el rol: " + ((res && res.message) || "Error de servidor."));
+    }
+  }, function() { alert("⚠️ Error de conexión al revocar el rol."); });
 };
 
 function actualizarSelectsGradosApp() {
@@ -1802,61 +1836,83 @@ window.handleLogin = async function() {
 
   if (powStatus) powStatus.textContent = "✓ Validación PoW SHA-256 Completada";
 
-  const usr = baseUsuariosAdmin.find(u => u.email.toLowerCase() === email);
-  if (usr) {
-    if (usr.estado !== "Aprobado") {
-      if (status) { status.className = "status-box error"; status.textContent = "⚠️ Su solicitud aún está en revisión por la Administración."; }
-      return;
-    }
+  const usrLocal = baseUsuariosAdmin.find(u => u.email.toLowerCase() === email);
+
+  function finalizarSesion(u) {
     currentUser = {
-      nombre: usr.nombre,
-      apellido: usr.apellido,
-      email: usr.email,
-      grado: usr.gradoNum || 2,
-      rol: usr.rol || "Miembro",
-      isSupremeAdmin: (usr.email === ADMIN_SUPREMO_EMAIL)
-    };
-  } else {
-    currentUser = {
-      nombre: "Patricio Alberto",
-      apellido: "Díaz Peña",
+      id: u.id || "USR-" + email,
+      nombre: u.nombre,
+      apellido: u.apellido,
       email: email,
-      grado: 2,
-      rol: (email === ADMIN_SUPREMO_EMAIL) ? "Administrador" : "Miembro",
-      isSupremeAdmin: (email === ADMIN_SUPREMO_EMAIL)
+      grado: u.gradoNum || 2,
+      rol: u.rol || "Miembro",
+      estado: u.estado || "Aprobado",
+      isSupremeAdmin: (email === ADMIN_SUPREMO_EMAIL.toLowerCase())
     };
+    SafeStorage.setItem("gosch_user", JSON.stringify(currentUser));
+    mostrarApp();
+    if (window.esUsuarioAdministrador && window.esUsuarioAdministrador()) {
+      window.cargarUsuariosDesdeServidor(function() { window.renderizarAdminTabla(); });
+    }
   }
 
-  SafeStorage.setItem("gosch_user", JSON.stringify(currentUser));
-  mostrarApp();
+  var onLoginSuccess = function(res) {
+    if (res && res.success && res.user) {
+      finalizarSesion(res.user);
+    } else {
+      var msgRes = (res && res.message) ? res.message : "Error al iniciar sesión.";
+      if (status) { status.className = "status-box error"; status.textContent = "⚠️ " + msgRes; }
+    }
+  };
+
+  var onLoginError = function() {
+    if (status) { status.className = "status-box error"; status.textContent = "⚠️ Error de conexión con el servidor. Intente nuevamente."; }
+  };
+
+  if (usrLocal && usrLocal.estado !== "Aprobado" && usrLocal.email !== ADMIN_SUPREMO_EMAIL) {
+    if (status) { status.className = "status-box error"; status.textContent = "⚠️ Su solicitud aún está en revisión por la Administración."; }
+    return;
+  }
+
+  ejecutarAccionBackend("login", { email: email, pin: pin }, onLoginSuccess, onLoginError);
 };
 
 window.handleRegister = async function() {
   const name = document.getElementById("reg-name").value.trim();
   const lastname = document.getElementById("reg-lastname").value.trim();
   const email = document.getElementById("reg-email").value.trim().toLowerCase();
-  const gradoVal = parseInt(document.getElementById("reg-grado").value, 10);
+  const gradoVal = parseInt(document.getElementById("reg-grado").value, 10) || 1;
+  const pin = document.getElementById("reg-pin").value.trim();
   const status = document.getElementById("auth-status");
   const powStatus = document.getElementById("pow-status-reg");
+
+  if (!name || !lastname || !email || !pin) {
+    if (status) { status.className = "status-box error"; status.textContent = "⚠️ Complete todos los campos, incluyendo su PIN personal de acceso al Templo."; }
+    return;
+  }
 
   if (powStatus) powStatus.textContent = "⚡ Calculando prueba de trabajo PoW...";
   await generarProofOfWorkValidado(email);
   if (powStatus) powStatus.textContent = "✓ Prueba PoW verificada";
 
-  const gObj = listaGradosMasonicos.find(g => g.num === gradoVal);
-  const nuevoUsuario = {
-    nombre: name,
-    apellido: lastname,
-    email: email,
-    grado: gObj ? gObj.label : (gradoVal + "°"),
-    gradoNum: gradoVal,
-    rol: "Miembro",
-    estado: "Pendiente"
+  var onRegSuccess = function(res) {
+    if (res && res.success) {
+      var msgOk = res.message || "✓ Solicitud enviada a la Administración.";
+      if (status) { status.className = "status-box success"; status.textContent = msgOk; }
+      if (window.cargarUsuariosDesdeServidor && window.esAdministradorSupremo()) {
+        window.cargarUsuariosDesdeServidor(function() { window.renderizarAdminTabla(); });
+      }
+    } else {
+      var msgErr = (res && res.message) ? res.message : "Error al enviar la solicitud.";
+      if (status) { status.className = "status-box error"; status.textContent = "⚠️ " + msgErr; }
+    }
   };
-  baseUsuariosAdmin.push(nuevoUsuario);
 
-  if (status) { status.className = "status-box success"; status.textContent = "✓ Solicitud enviada a la Administración. Registro de Q:. H:. " + name + " " + lastname + " en revisión."; }
-  window.renderizarAdminTabla();
+  var onRegError = function() {
+    if (status) { status.className = "status-box error"; status.textContent = "⚠️ Error de conexión con el servidor. Intente nuevamente."; }
+  };
+
+  ejecutarAccionBackend("register", { nombre: name, apellido: lastname, email: email, grado: gradoVal, pin: pin }, onRegSuccess, onRegError);
 };
 
 function mostrarApp() {
@@ -2225,54 +2281,9 @@ document.addEventListener("DOMContentLoaded", function() {
   
 
 /* BASE DE DATOS Y LÓGICA DEL CALENDARIO LOGIAL Y NOTICIAS OFICIALES (v84.0.0) */
-let baseEventosCalendario = [
-  {
-    id: "evt-1",
-    titulo: "Tenida de Solsticio de Invierno & Convivio Fraternal",
-    fecha: "2026-06-21",
-    hora: "20:00",
-    lugar: "Templo Central, Valle de Santiago",
-    grado: "GENERAL",
-    descripcion: "Tenida Magna de Solsticio con la presencia de las Dignidades de la Orden. Trabajos en Primer Grado."
-  },
-  {
-    id: "evt-2",
-    titulo: "Cámara de Instrucción de 2° Grado (Compañeros)",
-    fecha: "2026-09-10",
-    hora: "19:30",
-    lugar: "Cámara de Compañeros",
-    grado: "2",
-    descripcion: "Análisis del Tapiz del Segundo Grado y estudio de la Estrella Flamígera."
-  },
-  {
-    id: "evt-3",
-    titulo: "Tenida de Instrucción de 1° Grado (Aprendices)",
-    fecha: "2026-09-15",
-    hora: "20:00",
-    lugar: "Templo Oriente",
-    grado: "1",
-    descripcion: "Uso del Mazo y el Cincel. Estudio del Simbolismo de la Piedra Bruta."
-  }
-];
+let baseEventosCalendario = [];
 
-let baseNoticiasOrden = [
-  {
-    id: "not-1",
-    titulo: "Decreto de Gran Maestría: Apertura del Año Masónico",
-    fecha: "2026-08-20",
-    categoria: "DECRETO",
-    grado: "GENERAL",
-    contenido: "Se comunica a todos los V:. M:. y HH:. de las RR:. LL:. de la obediencia el calendario oficial de tenidas para el presente período académico y litúrgico."
-  },
-  {
-    id: "not-2",
-    titulo: "Incorporación de Nuevos Tratados de Filosofía Masónica al Repositorio",
-    fecha: "2026-08-24",
-    categoria: "COMUNICADO",
-    grado: "GENERAL",
-    contenido: "La Administración ha depositado en las Columnas las obras de Mario Bunge y Brian Greene para consulta de todos los grados."
-  }
-];
+let baseNoticiasOrden = [];
 
 let filtroEventoGradoActual = "TODOS";
 
@@ -2577,28 +2588,35 @@ window.renderizarAdminTabla = function() {
 window.aprobarSolicitudRegistro = function(email) {
   if (!window.esAdministradorSupremo()) return;
   const usr = baseUsuariosAdmin.find(u => u.email === email);
-  if (usr) {
-    usr.estado = "Aprobado";
-    if (typeof google !== 'undefined' && google.script && google.script.run) {
-      google.script.run.actualizarEstadoMiembro(currentUser.email, email, 'Aprobado');
+  if (!usr) return;
+  if (!currentUser) return;
+  ejecutarAccionBackend("updateMemberStatus", { email: currentUser.email, miembroEmail: email, nuevoEstado: "Aprobado" }, function(res) {
+    if (res && res.success) {
+      usr.estado = "Aprobado";
+      alert("✅ Solicitud de Q:. H:. " + usr.nombre + " " + usr.apellido + " APROBADA exitosamente.");
+      window.renderizarAdminTabla();
+    } else {
+      alert("⚠️ No se pudo aprobar: " + ((res && res.message) || "Error de servidor."));
     }
-    alert("✅ Solicitud de Q:. H:. " + usr.nombre + " " + usr.apellido + " APROBADA exitosamente.");
-    window.renderizarAdminTabla();
-  }
+  }, function() { alert("⚠️ Error de conexión al aprobar la solicitud."); });
 };
 
 window.rechazarSolicitudRegistro = function(email) {
   if (!window.esAdministradorSupremo()) return;
   if (!confirm("¿Está seguro de rechazar la solicitud de registro del correo " + email + "?")) return;
+  if (!currentUser) return;
   const idx = baseUsuariosAdmin.findIndex(u => u.email === email);
-  if (idx !== -1) {
-    baseUsuariosAdmin.splice(idx, 1);
-    if (typeof google !== 'undefined' && google.script && google.script.run) {
-      google.script.run.eliminarMiembro(currentUser.email, email);
+  if (idx === -1) return;
+  const usr = baseUsuariosAdmin[idx];
+  ejecutarAccionBackend("removeMember", { email: currentUser.email, miembroEmail: email }, function(res) {
+    if (res && res.success) {
+      baseUsuariosAdmin.splice(idx, 1);
+      alert("❌ Solicitud eliminada.");
+      window.renderizarAdminTabla();
+    } else {
+      alert("⚠️ No se pudo eliminar: " + ((res && res.message) || "Error de servidor."));
     }
-    alert("❌ Solicitud eliminada.");
-    window.renderizarAdminTabla();
-  }
+  }, function() { alert("⚠️ Error de conexión al eliminar la solicitud."); });
 };
 
 window.modificarGradoSolicitante = function(email) {
@@ -2609,15 +2627,17 @@ window.modificarGradoSolicitante = function(email) {
   if (isNaN(numG) || numG < 1) return;
 
   const usr = baseUsuariosAdmin.find(u => u.email === email);
-  if (usr) {
-    usr.gradoNum = numG;
-    usr.grado = numG + "° Grado";
-    if (typeof google !== 'undefined' && google.script && google.script.run) {
-      google.script.run.actualizarGradoMiembro(currentUser.email, email, numG);
+  if (!usr || !currentUser) return;
+  ejecutarAccionBackend("updateMemberGrade", { email: currentUser.email, miembroEmail: email, nuevoGrado: numG }, function(res) {
+    if (res && res.success) {
+      usr.gradoNum = numG;
+      usr.grado = numG + "° Grado";
+      alert("✏️ Grado del solicitante " + usr.nombre + " modificado a " + numG + "° Grado.");
+      window.renderizarAdminTabla();
+    } else {
+      alert("⚠️ No se pudo modificar el grado: " + ((res && res.message) || "Error de servidor."));
     }
-    alert("✏️ Grado del solicitante " + usr.nombre + " modificado a " + numG + "° Grado.");
-    window.renderizarAdminTabla();
-  }
+  }, function() { alert("⚠️ Error de conexión al modificar el grado."); });
 };
 
 window.renderizarSugerencias = function() {
