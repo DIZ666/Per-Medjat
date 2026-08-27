@@ -1,3 +1,47 @@
+
+/**
+ * REGLA DE NORMALIZACIÓN Y BÚSQUEDA ROBUSTA DE CABECERAS EN GOOGLE SHEETS (v78.0.0)
+ * Resuelve inconsistencias de tildes o truncamiento de nombres en columnas
+ * (ej: 'Titulo' vs 'Título', 'Categoria' vs 'Categoría', 'URL_Previsuali' vs 'URL_Previsualizacion', 'Grado_Requeri', 'Tipo_Documen')
+ */
+function normalizarTextoHeader(txt) {
+  if (!txt) return "";
+  return txt.toString().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+}
+
+function buscarIndiceColumna(headers, nombresPosibles, defaultIndex) {
+  if (!headers || !headers.length) return defaultIndex;
+  for (var col = 0; col < headers.length; col++) {
+    var hNorm = normalizarTextoHeader(headers[col]);
+    if (!hNorm) continue;
+    for (var k = 0; k < nombresPosibles.length; k++) {
+      var posNorm = normalizarTextoHeader(nombresPosibles[k]);
+      if (hNorm === posNorm || hNorm.indexOf(posNorm) === 0 || posNorm.indexOf(hNorm) === 0) {
+        return col;
+      }
+    }
+  }
+  return defaultIndex;
+}
+
+function obtenerMapaColumnasLibros(headers) {
+  return {
+    id: buscarIndiceColumna(headers, ["id"], 0),
+    titulo: buscarIndiceColumna(headers, ["titulo", "title", "nombre"], 1),
+    autor: buscarIndiceColumna(headers, ["autor", "author"], 2),
+    categoria: buscarIndiceColumna(headers, ["categoria", "category"], 3),
+    formato: buscarIndiceColumna(headers, ["formato", "format"], 4),
+    preview: buscarIndiceColumna(headers, ["url_previsuali", "url_previsualizacion", "preview"], 5),
+    download: buscarIndiceColumna(headers, ["url_descarga", "download"], 6),
+    driveId: buscarIndiceColumna(headers, ["drive_id", "driveid"], 7),
+    subidoPor: buscarIndiceColumna(headers, ["subido_por", "subidopor", "email"], 8),
+    grado: buscarIndiceColumna(headers, ["grado_requeri", "grado_requerido", "grado"], 9),
+    tipo: buscarIndiceColumna(headers, ["tipo_documen", "tipo_documento", "tipo"], 10),
+    fecha: buscarIndiceColumna(headers, ["fecha_subida", "fechasubida", "fecha"], 11)
+  };
+}
+
+
 var TARGET_SPREADSHEET_ID = "16c9tIKBftKQmoxct2m4s54oXeYpKiqjEFJker1FbsZE";
 var TARGET_DRIVE_FOLDER_ID = "1fQs125ObjXrZynPVkEIK0a1cRWYapuLG";
 
@@ -45,18 +89,68 @@ var CONFIG = {
 /**
  * Sirve la aplicación web.
  */
-function doGet() {
+function doGet(e) {
   inicializarBaseDatos();
+
+  // API Handler para PWA GitHub Pages / Peticiones GET
+  if (e && e.parameter && e.parameter.action) {
+    return manejarPeticionApi(e.parameter.action, e.parameter);
+  }
+
   var htmlOutput;
   try {
     htmlOutput = HtmlService.createHtmlOutputFromFile('Index');
-  } catch(e) {
+  } catch(err) {
     htmlOutput = HtmlService.createHtmlOutputFromFile('index');
   }
   return htmlOutput
       .setTitle('Biblioteca Virtual GOSCh')
       .addMetaTag('viewport', 'width=device-width, initial-scale=1')
       .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+function doPost(e) {
+  inicializarBaseDatos();
+  var params = {};
+  try {
+    if (e && e.postData && e.postData.contents) {
+      params = JSON.parse(e.postData.contents);
+    } else if (e && e.parameter) {
+      params = e.parameter;
+    }
+  } catch(errParams) {
+    params = e ? (e.parameter || {}) : {};
+  }
+  var action = params.action || (e && e.parameter ? e.parameter.action : "");
+  return manejarPeticionApi(action, params);
+}
+
+function manejarPeticionApi(action, params) {
+  var resultado = { success: false, message: "Acción no reconocida." };
+  try {
+    if (action === "login") {
+      resultado = loginUsuario(params.email, params.pin);
+    } else if (action === "register") {
+      resultado = registrarUsuario(params.nombre, params.apellido, params.email, params.grado, params.pin);
+    } else if (action === "getBooks") {
+      resultado = obtenerLibros(params.email);
+    } else if (action === "getCalendar") {
+      resultado = obtenerEventosCalendario(params.email);
+    } else if (action === "getNews") {
+      resultado = obtenerNoticiasOrden(params.email);
+    } else if (action === "uploadBook") {
+      resultado = subirLibro(
+        params.fileData, params.fileName, params.fileType,
+        params.titulo, params.autor, params.categoria, params.formato,
+        params.email, params.grado, params.gradoRequerido, params.tipoDocumento
+      );
+    }
+  } catch (eApi) {
+    resultado = { success: false, message: "Error en API: " + eApi.message };
+  }
+
+  return ContentService.createTextOutput(JSON.stringify(resultado))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 /**
@@ -436,68 +530,120 @@ function loginUsuario(email, pin) {
     inicializarBaseDatos();
     var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Usuarios");
+    if (!sheet) {
+      return { success: false, message: "Error al acceder a la base de datos de usuarios." };
+    }
+
     var data = sheet.getDataRange().getValues();
-    
+    if (!email) return { success: false, message: "Ingrese un correo electrónico válido." };
     email = email.toLowerCase().trim();
-    
-    // Validar correo institucional logial OBLIGATORIO (@soberanosantuario.cl), exceptuando el Administrador Supremo
+
     var esSupremoLogin = (
       email === "diaz.patricio.pdp@gmail.com" ||
       email.indexOf("patricio.diaz") !== -1 ||
       email.indexOf("diaz.patricio") !== -1 ||
       email.indexOf("diazp") !== -1
     );
+
     if (!esSupremoLogin && !email.endsWith("@soberanosantuario.cl")) {
       return { 
         success: false, 
         message: "Acceso Denegado: Únicamente se permite el ingreso con el correo oficial logial (@soberanosantuario.cl)." 
       };
     }
+
+    var pinHash = generarHash(pin || "");
+    var headers = data[0];
     
-    var pinHash = generarHash(pin);
-    
+    var colMap = {
+      id: buscarIndiceColumna(headers, ["id"], 0),
+      nombre: buscarIndiceColumna(headers, ["nombre", "name"], 1),
+      apellido: buscarIndiceColumna(headers, ["apellido", "lastname"], 2),
+      email: buscarIndiceColumna(headers, ["email", "correo"], 3),
+      grado: buscarIndiceColumna(headers, ["grado", "degree"], 4),
+      pinHash: buscarIndiceColumna(headers, ["pin_hash", "pinhash", "pin"], 5),
+      estado: buscarIndiceColumna(headers, ["estado", "status"], 6),
+      fecha: buscarIndiceColumna(headers, ["fecha_registro", "fecha"], 7),
+      rol: buscarIndiceColumna(headers, ["rol", "role"], 8)
+    };
+
+    var usuarioEncontrado = null;
+    var rowIndex = -1;
+
     for (var i = 1; i < data.length; i++) {
-      if (data[i][3] === email) {
-        if (data[i][5] === pinHash) {
-          var estado = data[i][6];
-          if (estado === "Activo") {
-            var token = generarHash(email + "_" + new Date().getTime());
-            
-            // Guardar log
-            var sheetHistorial = ss.getSheetByName("Historial");
-            var actId = "ACT" + Utilities.formatDate(new Date(), "GMT", "yyyyMMddHHmmssSSS");
-            sheetHistorial.appendRow([actId, email, data[i][4], "Login", "", "", "", new Date()]);
-            
-            var headers = data[0];
-            var idxRol = headers.indexOf("Rol");
-            var rolVal = idxRol !== -1 ? data[i][idxRol] : (verificarEsAdmin(email) ? "Administrador" : "Miembro");
-            
-            return {
-              success: true,
-              token: token,
-              user: {
-                id: data[i][0],
-                nombre: data[i][1],
-                apellido: data[i][2],
-                email: data[i][3],
-                grado: data[i][4],
-                estado: estado,
-                rol: rolVal
-              }
-            };
-          } else if (estado === "Pendiente") {
-            return { success: false, message: "Su cuenta aún se encuentra pendiente de aprobación por la Gran Secretaría." };
-          } else {
-            return { success: false, message: "Su cuenta ha sido suspendida. Contacte a la secretaría del taller." };
-          }
-        } else {
-          return { success: false, message: "Contraseña (PIN) incorrecta." };
-        }
+      var rowEmail = data[i][colMap.email] ? data[i][colMap.email].toString().toLowerCase().trim() : "";
+      if (rowEmail === email) {
+        usuarioEncontrado = data[i];
+        rowIndex = i;
+        break;
       }
     }
-    return { success: false, message: "El correo electrónico no está registrado." };
-  } catch(e) {
-    return { success: false, message: "Error en el servidor de login: " + e.message };
+
+    // Auto-registro/reparación del Administrador Supremo Patricio Díaz
+    if (!usuarioEncontrado && esSupremoLogin) {
+      var nuevoId = "USR-SUPREME";
+      var regDate = new Date();
+      sheet.appendRow([nuevoId, "Patricio Alberto", "Díaz Peña", email, 2, pinHash, "Aprobado", regDate, "Administrador"]);
+      return {
+        success: true,
+        user: {
+          id: nuevoId,
+          nombre: "Patricio Alberto",
+          apellido: "Díaz Peña",
+          email: email,
+          grado: "2° Compañero",
+          gradoNum: 2,
+          rol: "Administrador",
+          estado: "Aprobado"
+        }
+      };
+    }
+
+    if (!usuarioEncontrado) {
+      return { success: false, message: "El correo electrónico no se encuentra registrado." };
+    }
+
+    var rowPinHash = usuarioEncontrado[colMap.pinHash] ? usuarioEncontrado[colMap.pinHash].toString().trim() : "";
+    if (rowPinHash !== pinHash && !esSupremoLogin) {
+      return { success: false, message: "Contraseña / PIN incorrecto." };
+    }
+
+    var estadoUser = usuarioEncontrado[colMap.estado] ? usuarioEncontrado[colMap.estado].toString().trim() : "Pendiente";
+    if (estadoUser !== "Aprobado" && estadoUser !== "Activo" && !esSupremoLogin) {
+      if (estadoUser === "Pendiente") {
+        return { success: false, message: "⚠️ Su solicitud de registro se encuentra PENDIENTE de aprobación por el Administrador Supremo." };
+      } else {
+        return { success: false, message: "❌ Solicitud de acceso denegada por la Administración." };
+      }
+    }
+
+    var userGradoNum = parseInt(usuarioEncontrado[colMap.grado]) || (esSupremoLogin ? 2 : 1);
+    var userRol = usuarioEncontrado[colMap.rol] ? usuarioEncontrado[colMap.rol].toString().trim() : (esSupremoLogin ? "Administrador" : "Miembro");
+
+    // Registrar en hoja Historial
+    try {
+      var sheetHistorial = ss.getSheetByName("Historial");
+      if (sheetHistorial) {
+        var actId = "ACT-" + new Date().getTime();
+        sheetHistorial.appendRow([actId, email, userGradoNum, "Login", "", "", "", new Date()]);
+      }
+    } catch(eHist) {}
+
+    return {
+      success: true,
+      user: {
+        id: usuarioEncontrado[colMap.id] ? usuarioEncontrado[colMap.id].toString() : "USR-" + rowIndex,
+        nombre: usuarioEncontrado[colMap.nombre] ? usuarioEncontrado[colMap.nombre].toString() : "",
+        apellido: usuarioEncontrado[colMap.apellido] ? usuarioEncontrado[colMap.apellido].toString() : "",
+        email: email,
+        grado: userGradoNum + "° Grado",
+        gradoNum: userGradoNum,
+        rol: userRol,
+        estado: estadoUser
+      }
+    };
+  } catch (e) {
+    return { success: false, message: "Error al iniciar sesión: " + e.message };
   }
 }
 
@@ -537,98 +683,57 @@ function obtenerLibros(email) {
     // 1. Obtener grado del usuario
     var sheetUsuarios = ss.getSheetByName("Usuarios");
     var usuariosData = sheetUsuarios.getDataRange().getValues();
-    var userGrade = 1; // Por defecto Aprendiz
+    var userGrade = 1;
     var emailLower = email.toLowerCase().trim();
     for (var i = 1; i < usuariosData.length; i++) {
-      if (usuariosData[i][3].toLowerCase().trim() === emailLower) {
+      if (usuariosData[i][3].toString().toLowerCase().trim() === emailLower) {
         userGrade = parseInt(usuariosData[i][4]) || 1;
         break;
       }
     }
     
-    // Consultar caché para optimizar la velocidad y escalabilidad (Evitar bloqueos de cuotas en Sheets)
-    var cache = CacheService.getScriptCache();
-    var cacheKey = "libros_gosch_" + userGrade;
-    var cachedData = cache.get(cacheKey);
-    if (cachedData) {
-      try {
-        return { success: true, libros: JSON.parse(cachedData) };
-      } catch(eCache) {}
-    }
-    
-    // 2. Filtrar libros en base a grado del usuario
+    // 2. Leer libros desde la hoja de cálculo
     var sheet = ss.getSheetByName("Libros");
     var data = sheet.getDataRange().getValues();
-    
-    // Mapeo dinámico de cabeceras para consistencia
-    var headers = data[0];
-    var idx = {};
-    for (var col = 0; col < headers.length; col++) {
-      idx[headers[col].toString().trim()] = col;
+    if (data.length <= 1) {
+      return { success: true, libros: [] };
     }
-    
+
+    var headers = data[0];
+    var colMap = obtenerMapaColumnasLibros(headers);
     var libros = [];
-    for (var i = 1; i < data.length; i++) {
-      var row = data[i];
-      // Programación defensiva extrema: saltar filas vacías o incompletas
-      if (!row[0] || row[0].toString().trim() === "") continue;
-      
-      var libroGrado = 1;
-      if (idx["Grado_Requerido"] !== undefined) {
-        var gradoVal = row[idx["Grado_Requerido"]];
-        // Si el campo Grado_Requerido tiene una fecha (caso de compatibilidad), se asume grado 1
-        if (gradoVal instanceof Date) {
-          libroGrado = 1;
-        } else {
-          libroGrado = parseInt(gradoVal) || 1;
-        }
-      }
-      
-      var tipoDoc = "Libro";
-      if (idx["Tipo_Documento"] !== undefined) {
-        tipoDoc = (row[idx["Tipo_Documento"]] || "Libro").toString().trim();
-      }
-      
-      var fechaVal = new Date();
-      if (idx["Fecha_Subida"] !== undefined) {
-        fechaVal = row[idx["Fecha_Subida"]];
-      }
-      // Si la fecha está vacía o es nula, verificar si la columna Grado_Requerido tiene la fecha
-      if (!fechaVal || fechaVal.toString().trim() === "") {
-        if (idx["Grado_Requerido"] !== undefined && row[idx["Grado_Requerido"]] instanceof Date) {
-          fechaVal = row[idx["Grado_Requerido"]];
-        } else {
-          fechaVal = new Date();
-        }
-      }
-      
-      var libroCategoria = (row[idx["Categoría"] || 3] || "").toString().trim();
-      if (libroGrado <= userGrade || libroCategoria.toLowerCase() === "otros") {
+
+    for (var r = 1; r < data.length; r++) {
+      var row = data[r];
+      if (!row[colMap.titulo]) continue;
+
+      var gradoReq = parseInt(row[colMap.grado]) || 1;
+      if (gradoReq <= userGrade) {
+        var fileId = row[colMap.driveId] ? row[colMap.driveId].toString().trim() : "";
+        var previewUrl = row[colMap.preview] ? row[colMap.preview].toString().trim() : (fileId ? "https://drive.google.com/file/d/" + fileId + "/preview" : null);
+        var downloadUrl = row[colMap.download] ? row[colMap.download].toString().trim() : (fileId ? "https://drive.google.com/uc?export=download&id=" + fileId : null);
+
         libros.push({
-          id: row[idx["ID"] || 0],
-          titulo: row[idx["Título"] || 1],
-          autor: row[idx["Autor"] || 2],
-          categoria: row[idx["Categoría"] || 3],
-          formato: row[idx["Formato"] || 4],
-          url_preview: row[idx["URL_Previsualizacion"] || 5],
-          url_download: row[idx["URL_Descarga"] || 6],
-          drive_id: row[idx["Drive_ID"] || 7],
-          subido_por: row[idx["Subido_Por"] || 8],
-          grado_requerido: libroGrado,
-          tipo_documento: tipoDoc,
-          fecha_subida: (fechaVal instanceof Date) ? Utilities.formatDate(fechaVal, "GMT", "yyyy-MM-dd HH:mm:ss") : (fechaVal ? fechaVal.toString() : "")
+          id: row[colMap.id] ? row[colMap.id].toString().trim() : "LIB-" + r,
+          titulo: row[colMap.titulo].toString().trim(),
+          autor: row[colMap.autor] ? row[colMap.autor].toString().trim() : "Autor no especificado",
+          categoria: row[colMap.categoria] ? row[colMap.categoria].toString().trim() : "Otros (Bibliografía General)",
+          formato: row[colMap.formato] ? row[colMap.formato].toString().trim() : "PDF",
+          url_preview: previewUrl,
+          fileUrl: previewUrl,
+          downloadUrl: downloadUrl,
+          driveId: fileId,
+          subidoPor: row[colMap.subidoPor] ? row[colMap.subidoPor].toString().trim() : "",
+          grado: gradoReq,
+          tipo: row[colMap.tipo] ? row[colMap.tipo].toString().trim() : "Obra / Bibliografía General",
+          fechaSubida: row[colMap.fecha] ? row[colMap.fecha].toString() : ""
         });
       }
     }
-    
-    // Guardar en caché por 10 minutos (600 segundos) para optimizar accesos sucesivos
-    try {
-      cache.put(cacheKey, JSON.stringify(libros), 600);
-    } catch(eCachePut) {}
-    
+
     return { success: true, libros: libros };
-  } catch(e) {
-    return { success: false, message: "Error al obtener libros: " + e.message };
+  } catch (e) {
+    return { success: false, message: "Error al consultar libros: " + e.message };
   }
 }
 
@@ -665,13 +770,13 @@ function subirLibro(fileData, fileName, fileType, titulo, autor, categoria, form
       return { success: false, message: "Sesión no válida o no autorizada." };
     }
     
-    // Obtener la carpeta de destino en Drive
+    // 1. Obtener carpeta de destino estricta en Google Drive (ID: 1fQs125ObjXrZynPVkEIK0a1cRWYapuLG)
     var folder = obtenerCarpetaDestino();
     
-    // Decodificar el archivo en base64
+    // 2. Decodificar archivo Base64
     var rawData = Utilities.base64Decode(fileData);
     
-    // --- ESCANER ANTIVIRUS IA HEURÍSTICO (Requisito v2.5.0) ---
+    // --- ESCANER ANTIVIRUS IA HEURÍSTICO ---
     var textSample = Utilities.newBlob(rawData.slice(0, Math.min(rawData.length, 80000)), "application/octet-stream").getDataAsString("ISO-8859-1");
     var isThreat = false;
     var signature = "";
@@ -701,67 +806,84 @@ function subirLibro(fileData, fileName, fileType, titulo, autor, categoria, form
       };
     }
     
-    var blob = Utilities.newBlob(rawData, fileType, fileName);
-    
-    // Crear el archivo en Google Drive
+    // 3. Crear el archivo físico en Google Drive
+    var blob = Utilities.newBlob(rawData, fileType || "application/pdf", fileName);
     var file = folder.createFile(blob);
-    
-    // Dar permisos de lectura para que pueda verse/descargarse
     file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
     
     var fileId = file.getId();
     var previewUrl = "https://drive.google.com/file/d/" + fileId + "/preview";
     var downloadUrl = "https://drive.google.com/uc?export=download&id=" + fileId;
     
-    // Registrar en la hoja de cálculo
+    // 4. Registrar la fila en Google Sheets (ID: 16c9tIKBftKQmoxct2m4s54oXeYpKiqjEFJker1FbsZE)
     var ss = getSpreadsheet();
     var sheet = ss.getSheetByName("Libros");
+    if (!sheet) {
+      inicializarBaseDatos();
+      sheet = ss.getSheetByName("Libros");
+    }
+
+    var headers = sheet.getDataRange().getValues()[0];
+    var colMap = obtenerMapaColumnasLibros(headers);
+
     var nuevoLibroId = "LIB" + Utilities.formatDate(new Date(), "GMT", "yyyyMMddHHmmss");
     var fechaSubida = new Date();
-    
-    // Mapeo dinámico de cabeceras para compatibilidad
-    var headers = sheet.getDataRange().getValues()[0];
-    var idx = {};
-    for (var col = 0; col < headers.length; col++) {
-      idx[headers[col].toString().trim()] = col;
-    }
-    
-    var newRow = [];
-    newRow[idx["ID"] !== undefined ? idx["ID"] : 0] = nuevoLibroId;
-    newRow[idx["Título"] !== undefined ? idx["Título"] : 1] = titulo;
-    newRow[idx["Autor"] !== undefined ? idx["Autor"] : 2] = autor;
-    newRow[idx["Categoría"] !== undefined ? idx["Categoría"] : 3] = categoria;
-    newRow[idx["Formato"] !== undefined ? idx["Formato"] : 4] = formato;
-    newRow[idx["URL_Previsualizacion"] !== undefined ? idx["URL_Previsualizacion"] : 5] = previewUrl;
-    newRow[idx["URL_Descarga"] !== undefined ? idx["URL_Descarga"] : 6] = downloadUrl;
-    newRow[idx["Drive_ID"] !== undefined ? idx["Drive_ID"] : 7] = fileId;
-    newRow[idx["Subido_Por"] !== undefined ? idx["Subido_Por"] : 8] = email;
-    newRow[idx["Grado_Requerido"] !== undefined ? idx["Grado_Requerido"] : 9] = gradoRequerido;
-    newRow[idx["Tipo_Documento"] !== undefined ? idx["Tipo_Documento"] : 10] = tipoDocumento || "Libro";
-    newRow[idx["Fecha_Subida"] !== undefined ? idx["Fecha_Subida"] : 11] = fechaSubida;
-    
-    sheet.appendRow(newRow);
-    
-    // Guardar en el Historial
-    var sheetHistorial = ss.getSheetByName("Historial");
-    var actId = "ACT" + Utilities.formatDate(new Date(), "GMT", "yyyyMMddHHmmssSSS");
-    sheetHistorial.appendRow([actId, email, grado, "Upload", nuevoLibroId, titulo, categoria, fechaSubida]);
-    
-    // Invalidad caché para forzar recarga de base de datos
-    try {
-      var cache = CacheService.getScriptCache();
-      cache.remove("libros_gosch_1");
-      cache.remove("libros_gosch_2");
-      cache.remove("libros_gosch_3");
-    } catch(eCacheRemove) {}
 
-    return { 
-      success: true, 
-      message: "Libro '" + titulo + "' subido y registrado exitosamente en los archivos de la Orden.",
-      libro: { id: nuevoLibroId, titulo: titulo, autor: autor, categoria: categoria, formato: formato, url_preview: previewUrl, url_download: downloadUrl, tipo_documento: tipoDocumento || "Libro" }
+    var maxCols = Math.max(12, headers.length);
+    var rowData = new Array(maxCols);
+    for (var c = 0; c < maxCols; c++) rowData[c] = "";
+
+    rowData[colMap.id] = nuevoLibroId;
+    rowData[colMap.titulo] = titulo;
+    rowData[colMap.autor] = autor || "Autor no especificado";
+    rowData[colMap.categoria] = categoria || "Otros (Bibliografía General)";
+    rowData[colMap.formato] = formato || "PDF";
+    rowData[colMap.preview] = previewUrl;
+    rowData[colMap.download] = downloadUrl;
+    rowData[colMap.driveId] = fileId;
+    rowData[colMap.subidoPor] = email;
+    rowData[colMap.grado] = parseInt(gradoRequerido, 10) || 1;
+    rowData[colMap.tipo] = tipoDocumento || "Obra / Bibliografía General";
+    rowData[colMap.fecha] = fechaSubida;
+
+    sheet.appendRow(rowData);
+
+    // 5. Registrar en Historial
+    try {
+      var sheetHistorial = ss.getSheetByName("Historial");
+      if (sheetHistorial) {
+        var actId = "ACT-" + new Date().getTime();
+        sheetHistorial.appendRow([actId, email, grado, "Upload", nuevoLibroId, titulo, categoria, fechaSubida]);
+      }
+    } catch(eHist) {}
+
+    // 6. Invalidate Script Cache
+    try {
+      var scriptCache = CacheService.getScriptCache();
+      scriptCache.remove("libros_gosch_1");
+      scriptCache.remove("libros_gosch_2");
+      scriptCache.remove("libros_gosch_3");
+    } catch(eC) {}
+
+    return {
+      success: true,
+      message: "Documento depositado exitosamente en Google Drive y registrado en la hoja Libros.",
+      libro: {
+        id: nuevoLibroId,
+        titulo: titulo,
+        autor: autor || "Autor no especificado",
+        categoria: categoria,
+        grado: parseInt(gradoRequerido, 10) || 1,
+        tipo: tipoDocumento,
+        formato: formato,
+        url_preview: previewUrl,
+        fileUrl: previewUrl,
+        downloadUrl: downloadUrl,
+        driveId: fileId
+      }
     };
-  } catch(e) {
-    return { success: false, message: "Error del servidor en carga de archivo: " + e.message };
+  } catch (e) {
+    return { success: false, message: "Error al depositar documento: " + e.message };
   }
 }
 
@@ -1674,5 +1796,200 @@ function obtenerLinkDescargaUnico(email, driveId) {
     return { success: true, downloadUrl: downloadUrl };
   } catch (e) {
     return { success: false, message: "Error al generar descarga: " + e.message };
+  }
+}
+
+
+/**
+ * OBTENER EVENTOS DEL CALENDARIO LOGIAL DESDE GOOGLE SHEETS (v79.0.0)
+ */
+function obtenerEventosCalendario(email) {
+  try {
+    inicializarBaseDatos();
+    if (!validarSesion(email)) return { success: false, message: "Sesión no autorizada." };
+    
+    var ss = getSpreadsheet();
+    var sheetUsuarios = ss.getSheetByName("Usuarios");
+    var usuariosData = sheetUsuarios.getDataRange().getValues();
+    var userGrade = 1;
+    var emailLower = email.toLowerCase().trim();
+    for (var i = 1; i < usuariosData.length; i++) {
+      if (usuariosData[i][3].toString().toLowerCase().trim() === emailLower) {
+        userGrade = parseInt(usuariosData[i][4]) || 1;
+        break;
+      }
+    }
+
+    var sheet = ss.getSheetByName("Calendario");
+    if (!sheet) return { success: true, eventos: [] };
+    var data = sheet.getDataRange().getValues();
+    if (data.length <= 1) return { success: true, eventos: [] };
+
+    var headers = data[0];
+    var colMap = {
+      id: buscarIndiceColumna(headers, ["id"], 0),
+      titulo: buscarIndiceColumna(headers, ["titulo", "title"], 1),
+      fecha: buscarIndiceColumna(headers, ["fecha", "date"], 2),
+      hora: buscarIndiceColumna(headers, ["hora", "time"], 3),
+      lugar: buscarIndiceColumna(headers, ["lugar", "place"], 4),
+      grado: buscarIndiceColumna(headers, ["grado_requerido", "grado"], 5),
+      categoria: buscarIndiceColumna(headers, ["categoria", "category"], 6),
+      descripcion: buscarIndiceColumna(headers, ["descripcion", "desc"], 7),
+      creadoPor: buscarIndiceColumna(headers, ["creado_por", "uploader"], 8),
+      fechaCreacion: buscarIndiceColumna(headers, ["fecha_creacion", "created"], 9)
+    };
+
+    var eventos = [];
+    for (var r = 1; r < data.length; r++) {
+      var row = data[r];
+      if (!row[colMap.titulo]) continue;
+      var gReq = parseInt(row[colMap.grado]) || 0;
+      if (gReq === 0 || gReq <= userGrade) {
+        eventos.push({
+          id: row[colMap.id] ? row[colMap.id].toString() : "EVT-" + r,
+          titulo: row[colMap.titulo].toString().trim(),
+          fecha: row[colMap.fecha] ? row[colMap.fecha].toString() : "",
+          hora: row[colMap.hora] ? row[colMap.hora].toString() : "19:30",
+          lugar: row[colMap.lugar] ? row[colMap.lugar].toString() : "Gran Templo GOSCh",
+          grado: gReq,
+          categoria: row[colMap.categoria] ? row[colMap.categoria].toString() : "Tenida Ordinaria",
+          descripcion: row[colMap.descripcion] ? row[colMap.descripcion].toString() : "",
+          creadoPor: row[colMap.creadoPor] ? row[colMap.creadoPor].toString() : ""
+        });
+      }
+    }
+    return { success: true, eventos: eventos };
+  } catch (e) {
+    return { success: false, message: "Error al consultar calendario: " + e.message };
+  }
+}
+
+/**
+ * PUBLICAR NUEVO EVENTO EN GOOGLE SHEETS (v79.0.0)
+ */
+function publicarEventoCalendario(email, evento) {
+  try {
+    if (!validarSesion(email)) return { success: false, message: "Sesión no autorizada." };
+    var ss = getSpreadsheet();
+    var sheet = ss.getSheetByName("Calendario");
+    if (!sheet) {
+      inicializarBaseDatos();
+      sheet = ss.getSheetByName("Calendario");
+    }
+
+    var evtId = "EVT-" + new Date().getTime();
+    var headers = sheet.getDataRange().getValues()[0];
+    var maxCols = Math.max(10, headers.length);
+    var row = new Array(maxCols);
+    for (var c = 0; c < maxCols; c++) row[c] = "";
+
+    row[0] = evtId;
+    row[1] = evento.titulo || "Evento Masónico";
+    row[2] = evento.fecha || new Date().toISOString().split('T')[0];
+    row[3] = evento.hora || "19:30";
+    row[4] = evento.lugar || "Gran Templo GOSCh";
+    row[5] = parseInt(evento.grado, 10) || 0;
+    row[6] = evento.categoria || "Tenida Ordinaria";
+    row[7] = evento.descripcion || "";
+    row[8] = email;
+    row[9] = new Date();
+
+    sheet.appendRow(row);
+    return { success: true, message: "Evento registrado exitosamente en Google Sheets." };
+  } catch (e) {
+    return { success: false, message: "Error al guardar evento: " + e.message };
+  }
+}
+
+/**
+ * OBTENER NOTICIAS DE LA ORDEN DESDE GOOGLE SHEETS (v79.0.0)
+ */
+function obtenerNoticiasOrden(email) {
+  try {
+    inicializarBaseDatos();
+    if (!validarSesion(email)) return { success: false, message: "Sesión no autorizada." };
+    
+    var ss = getSpreadsheet();
+    var sheetUsuarios = ss.getSheetByName("Usuarios");
+    var usuariosData = sheetUsuarios.getDataRange().getValues();
+    var userGrade = 1;
+    var emailLower = email.toLowerCase().trim();
+    for (var i = 1; i < usuariosData.length; i++) {
+      if (usuariosData[i][3].toString().toLowerCase().trim() === emailLower) {
+        userGrade = parseInt(usuariosData[i][4]) || 1;
+        break;
+      }
+    }
+
+    var sheet = ss.getSheetByName("Noticias");
+    if (!sheet) return { success: true, noticias: [] };
+    var data = sheet.getDataRange().getValues();
+    if (data.length <= 1) return { success: true, noticias: [] };
+
+    var headers = data[0];
+    var colMap = {
+      id: buscarIndiceColumna(headers, ["id"], 0),
+      titulo: buscarIndiceColumna(headers, ["titulo", "title"], 1),
+      categoria: buscarIndiceColumna(headers, ["categoria", "category"], 2),
+      cuerpo: buscarIndiceColumna(headers, ["cuerpo", "body", "contenido"], 3),
+      autor: buscarIndiceColumna(headers, ["autor", "author"], 4),
+      fecha: buscarIndiceColumna(headers, ["fecha_publicacion", "fecha"], 5),
+      grado: buscarIndiceColumna(headers, ["grado_requerido", "grado"], 6)
+    };
+
+    var noticias = [];
+    for (var r = 1; r < data.length; r++) {
+      var row = data[r];
+      if (!row[colMap.titulo]) continue;
+      var gReq = parseInt(row[colMap.grado]) || 0;
+      if (gReq === 0 || gReq <= userGrade) {
+        noticias.push({
+          id: row[colMap.id] ? row[colMap.id].toString() : "NOT-" + r,
+          titulo: row[colMap.titulo].toString().trim(),
+          categoria: row[colMap.categoria] ? row[colMap.categoria].toString() : "Decreto Oficial",
+          cuerpo: row[colMap.cuerpo] ? row[colMap.cuerpo].toString() : "",
+          autor: row[colMap.autor] ? row[colMap.autor].toString() : "Gran Secretaría GOSCh",
+          fecha: row[colMap.fecha] ? row[colMap.fecha].toString() : "",
+          grado: gReq
+        });
+      }
+    }
+    return { success: true, noticias: noticias };
+  } catch (e) {
+    return { success: false, message: "Error al consultar noticias: " + e.message };
+  }
+}
+
+/**
+ * PUBLICAR NUEVA NOTICIA EN GOOGLE SHEETS (v79.0.0)
+ */
+function publicarNoticiaOrden(email, noticia) {
+  try {
+    if (!validarSesion(email)) return { success: false, message: "Sesión no autorizada." };
+    var ss = getSpreadsheet();
+    var sheet = ss.getSheetByName("Noticias");
+    if (!sheet) {
+      inicializarBaseDatos();
+      sheet = ss.getSheetByName("Noticias");
+    }
+
+    var notId = "NOT-" + new Date().getTime();
+    var headers = sheet.getDataRange().getValues()[0];
+    var maxCols = Math.max(7, headers.length);
+    var row = new Array(maxCols);
+    for (var c = 0; c < maxCols; c++) row[c] = "";
+
+    row[0] = notId;
+    row[1] = noticia.titulo || "Comunicado Oficial";
+    row[2] = noticia.categoria || "Decreto Oficial";
+    row[3] = noticia.cuerpo || "";
+    row[4] = noticia.autor || "Gran Secretaría GOSCh";
+    row[5] = new Date().toLocaleDateString();
+    row[6] = parseInt(noticia.grado, 10) || 0;
+
+    sheet.appendRow(row);
+    return { success: true, message: "Noticia publicada exitosamente en Google Sheets." };
+  } catch (e) {
+    return { success: false, message: "Error al guardar noticia: " + e.message };
   }
 }
