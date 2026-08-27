@@ -1,0 +1,22 @@
+{
+  "name": "Biblioteca Virtual GOSCh",
+  "short_name": "Biblioteca GOSCh",
+  "description": "Portal de instrucción, tomos y trazados de arquitectura del Gran Oriente Soberano de Chile.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#030c17",
+  "theme_color": "#071426",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "./icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ]
+}

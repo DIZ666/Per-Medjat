@@ -1,0 +1,1698 @@
+/**
+ * Biblioteca Virtual GOSCh - Google Apps Script Backend
+ * Servidor de base de datos en Sheets y almacenamiento en Google Drive.
+ */
+
+// Configuración general
+var CONFIG = {
+  FOLDER_NAME: "Biblioteca Virtual GOSCh",
+  SECRET: "GOSCh_Soberano_Santuario_2026",
+  PALABRAS_PASO: {
+    "1": ["tubalcain", "tubalcaín"],      // Aprendiz
+    "2": ["shibboleth", "schibboleth"],  // Compañero
+    "3": ["giblim", "mac-benac"],        // Maestro
+    "33": ["herodum", "spes mea in deo est"] // Grado 33
+  }
+};
+
+/**
+ * Sirve la aplicación web.
+ */
+function doGet() {
+  inicializarBaseDatos();
+  var htmlOutput;
+  try {
+    htmlOutput = HtmlService.createHtmlOutputFromFile('Index');
+  } catch(e) {
+    htmlOutput = HtmlService.createHtmlOutputFromFile('index');
+  }
+  return htmlOutput
+      .setTitle('Biblioteca Virtual GOSCh')
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+/**
+ * Función para incluir archivos HTML dentro del Index.html (CSS y JS modular)
+ */
+function include(filename) {
+  try {
+    return HtmlService.createHtmlOutputFromFile(filename).getContent();
+  } catch(e) {
+    try {
+      var altName = filename === 'Index' ? 'index' : (filename === 'index' ? 'Index' : filename);
+      return HtmlService.createHtmlOutputFromFile(altName).getContent();
+    } catch(e2) {
+      return `<!-- Error al cargar ${filename}: ${e.message} -->`;
+    }
+  }
+}
+
+/**
+ * Obtiene o crea la carpeta principal en Google Drive
+ */
+function obtenerCarpetaDestino() {
+  // Usar el ID específico del folder del proyecto en Drive para asegurar consistencia
+  var folderId = "1fQs125ObjXrZynPVkEIK0a1cRWYapuLG";
+  try {
+    return DriveApp.getFolderById(folderId);
+  } catch(e) {
+    // Si falla o no se tiene acceso directo, buscar por nombre o crear nueva carpeta
+    var carpetas = DriveApp.getFoldersByName(CONFIG.FOLDER_NAME);
+    if (carpetas.hasNext()) {
+      return carpetas.next();
+    } else {
+      var nuevaCarpeta = DriveApp.createFolder(CONFIG.FOLDER_NAME);
+      nuevaCarpeta.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      return nuevaCarpeta;
+    }
+  }
+}
+
+/**
+ * Escanea la carpeta en Drive y registra libros nuevos en Google Sheets
+ */
+function sincronizarLibrosConDrive() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Libros");
+    if (!sheet) {
+      inicializarBaseDatos();
+      sheet = ss.getSheetByName("Libros");
+    }
+    
+    // Obtener la carpeta de destino
+    var folder = obtenerCarpetaDestino();
+    var files = folder.getFiles();
+    
+    // Leer los IDs de Drive existentes en la hoja para evitar duplicados
+    var data = sheet.getDataRange().getValues();
+    var headers = data[0];
+    var idx = {};
+    for (var col = 0; col < headers.length; col++) {
+      idx[headers[col].toString().trim()] = col;
+    }
+    
+    var driveIdCol = idx["Drive_ID"] !== undefined ? idx["Drive_ID"] : 7;
+    var existentes = {};
+    for (var i = 1; i < data.length; i++) {
+      var dId = data[i][driveIdCol];
+      if (dId) {
+        existentes[dId.toString().trim()] = true;
+      }
+    }
+    
+    var nuevosRegistrados = 0;
+    
+    while (files.hasNext()) {
+      var file = files.next();
+      var fileId = file.getId();
+      
+      // Si el archivo no está en la hoja, registrar de forma defensiva
+      if (!existentes[fileId]) {
+        var fileName = file.getName();
+        // Separar nombre y extensión
+        var dotIdx = fileName.lastIndexOf(".");
+        var titulo = dotIdx !== -1 ? fileName.substring(0, dotIdx) : fileName;
+        var extension = dotIdx !== -1 ? fileName.substring(dotIdx + 1).toUpperCase() : "PDF";
+        
+        // Intentar extraer metadatos del archivo PDF en Drive
+        var metadatos = { titulo: "", autor: "" };
+        if (extension === "PDF") {
+          metadatos = extraerMetadatosDePdfEnDrive(file);
+        }
+        
+        var autor = metadatos.autor || "Desconocido";
+        var tituloDetectado = metadatos.titulo || titulo;
+        
+        // Si no se detectó el autor en metadatos, intentar parsear del nombre usando patrón "Autor - Título"
+        if (autor === "Desconocido" && titulo.indexOf(" - ") !== -1) {
+          var partes = titulo.split(" - ");
+          if (partes.length >= 2) {
+            if (partes[0].trim().length < partes[1].trim().length) {
+              autor = partes[0].trim();
+              tituloDetectado = partes[1].trim();
+            } else {
+              tituloDetectado = partes[0].trim();
+              autor = partes[1].trim();
+            }
+          }
+        }
+        
+        titulo = tituloDetectado;
+        
+        // Determinar categoría y tipo según nombre
+        var categoria = "Otros";
+        var tipoDoc = "Libro";
+        
+        var nameLower = fileName.toLowerCase();
+        if (nameLower.indexOf("trazado") !== -1 || nameLower.indexOf("trabajo") !== -1) {
+          tipoDoc = "Trazado";
+          categoria = "Revistas y Actas";
+        } else if (nameLower.indexOf("instruccion") !== -1 || nameLower.indexOf("guia") !== -1 || nameLower.indexOf("ppt") !== -1 || nameLower.indexOf("material") !== -1) {
+          tipoDoc = "Material";
+          categoria = "Simbología";
+        } else if (nameLower.indexOf("liturgia") !== -1 || nameLower.indexOf("ritual") !== -1) {
+          categoria = "Simbología";
+        } else if (nameLower.indexOf("hermet") !== -1 || nameLower.indexOf("kybalion") !== -1 || nameLower.indexOf("esoter") !== -1) {
+          categoria = "Esoterismo / Hermetismo";
+        } else if (nameLower.indexOf("memphis") !== -1 || nameLower.indexOf("misraim") !== -1 || nameLower.indexOf("egipto") !== -1) {
+          categoria = "Estudios Memphis-Misraïm";
+        }
+        
+        var nuevoLibroId = "LIB" + Utilities.formatDate(new Date(), "GMT", "yyyyMMddHHmmss") + "_" + Math.floor(Math.random() * 1000);
+        var previewUrl = "https://drive.google.com/file/d/" + fileId + "/preview";
+        var downloadUrl = "https://drive.google.com/uc?export=download&id=" + fileId;
+        var fechaSubida = file.getDateCreated();
+        
+        // Dar permisos de lectura pública en Drive para su visualización
+        try {
+          file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        } catch(err) {
+          // Ignorar si no se tienen permisos administrativos
+        }
+        
+        var newRow = [];
+        newRow[idx["ID"] !== undefined ? idx["ID"] : 0] = nuevoLibroId;
+        newRow[idx["Título"] !== undefined ? idx["Título"] : 1] = titulo;
+        newRow[idx["Autor"] !== undefined ? idx["Autor"] : 2] = autor;
+        newRow[idx["Categoría"] !== undefined ? idx["Categoría"] : 3] = categoria;
+        newRow[idx["Formato"] !== undefined ? idx["Formato"] : 4] = extension;
+        newRow[idx["URL_Previsualizacion"] !== undefined ? idx["URL_Previsualizacion"] : 5] = previewUrl;
+        newRow[idx["URL_Descarga"] !== undefined ? idx["URL_Descarga"] : 6] = downloadUrl;
+        newRow[idx["Drive_ID"] !== undefined ? idx["Drive_ID"] : 7] = fileId;
+        newRow[idx["Subido_Por"] !== undefined ? idx["Subido_Por"] : 8] = "sincronizador_drive@gosch.cl";
+        newRow[idx["Grado_Requerido"] !== undefined ? idx["Grado_Requerido"] : 9] = 1;
+        newRow[idx["Tipo_Documento"] !== undefined ? idx["Tipo_Documento"] : 10] = tipoDoc;
+        newRow[idx["Fecha_Subida"] !== undefined ? idx["Fecha_Subida"] : 11] = fechaSubida;
+        
+        sheet.appendRow(newRow);
+        nuevosRegistrados++;
+      }
+    }
+    
+    return { success: true, nuevos: nuevosRegistrados };
+  } catch(e) {
+    return { success: false, message: "Error al sincronizar con Drive: " + e.message };
+  }
+}
+
+/**
+ * Inicializa las tablas en la hoja de cálculo activa si no existen
+ */
+function inicializarBaseDatos() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) {
+    // Si se ejecuta standalone, crea una nueva hoja de cálculo
+    ss = SpreadsheetApp.create("Base de Datos - Biblioteca GOSCh");
+  }
+  
+  // 1. Hoja de Usuarios
+  var sheetUsuarios = ss.getSheetByName("Usuarios");
+  if (!sheetUsuarios) {
+    sheetUsuarios = ss.insertSheet("Usuarios");
+    sheetUsuarios.appendRow(["ID", "Nombre", "Apellido", "Email", "Grado", "PIN_Hash", "Estado", "Fecha_Registro", "Rol"]);
+    sheetUsuarios.getRange("A1:I1").setFontWeight("bold").setBackground("#071426").setFontColor("#ffffff");
+  } else {
+    // Comprobar si tiene la columna Rol
+    var lastCol = sheetUsuarios.getLastColumn();
+    var headers = lastCol > 0 ? sheetUsuarios.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+    if (headers.indexOf("Rol") === -1) {
+      sheetUsuarios.getRange(1, 9).setValue("Rol").setFontWeight("bold").setBackground("#071426").setFontColor("#ffffff");
+      var lastRow = sheetUsuarios.getLastRow();
+      if (lastRow > 1) {
+        var rolesRange = sheetUsuarios.getRange(2, 9, lastRow - 1, 1);
+        var rolesValues = [];
+        var emailsValues = sheetUsuarios.getRange(2, 4, lastRow - 1, 1).getValues();
+        for (var r = 0; r < emailsValues.length; r++) {
+          var em = emailsValues[r][0].toString().toLowerCase().trim();
+          var isAdm = (
+            em.indexOf("diaz.patricio") !== -1 ||
+            em.indexOf("patricio.diaz") !== -1 ||
+            em.indexOf("diazp") !== -1 ||
+            em.indexOf("victor.mena") !== -1 ||
+            em.indexOf("rodrigo.espinoza") !== -1
+          );
+          rolesValues.push([isAdm ? "Administrador" : "Miembro"]);
+        }
+        rolesRange.setValues(rolesValues);
+      }
+    }
+  }
+  
+  // 2. Hoja de Libros
+  var sheetLibros = ss.getSheetByName("Libros");
+  if (!sheetLibros) {
+    sheetLibros = ss.insertSheet("Libros");
+    sheetLibros.appendRow(["ID", "Título", "Autor", "Categoría", "Formato", "URL_Previsualizacion", "URL_Descarga", "Drive_ID", "Subido_Por", "Grado_Requerido", "Tipo_Documento", "Fecha_Subida"]);
+    sheetLibros.getRange("A1:L1").setFontWeight("bold").setBackground("#071426").setFontColor("#ffffff");
+    
+
+  } else {
+    // Si la hoja ya existe, comprobar cabeceras
+    var lastCol = sheetLibros.getLastColumn();
+    var headers = lastCol > 0 ? sheetLibros.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+    var hasGrado = headers.indexOf("Grado_Requerido") !== -1;
+    var hasTipo = headers.indexOf("Tipo_Documento") !== -1;
+    
+    if (!hasGrado || !hasTipo) {
+      // Re-establecer cabeceras completas para asegurar L1 y consistencia
+      sheetLibros.getRange(1, 1, 1, 12).setValues([["ID", "Título", "Autor", "Categoría", "Formato", "URL_Previsualizacion", "URL_Descarga", "Drive_ID", "Subido_Por", "Grado_Requerido", "Tipo_Documento", "Fecha_Subida"]]);
+      sheetLibros.getRange("A1:L1").setFontWeight("bold").setBackground("#071426").setFontColor("#ffffff");
+    }
+  }
+  
+  // 3. Hoja de Historial de Actividad
+  var sheetHistorial = ss.getSheetByName("Historial");
+  if (!sheetHistorial) {
+    sheetHistorial = ss.insertSheet("Historial");
+    sheetHistorial.appendRow(["ID", "Email_Usuario", "Grado", "Acción", "Libro_ID", "Libro_Título", "Categoría", "Timestamp"]);
+    sheetHistorial.getRange("A1:H1").setFontWeight("bold").setBackground("#071426").setFontColor("#ffffff");
+  }
+
+  // 4. Hoja de Préstamos Físicos
+  var sheetPrestamos = ss.getSheetByName("Prestamos");
+  if (!sheetPrestamos) {
+    sheetPrestamos = ss.insertSheet("Prestamos");
+    sheetPrestamos.appendRow(["ID", "Libro_Fisico", "Hermano_Email", "Hermano_Nombre", "Fecha_Prestamo", "Dias_Prestamo", "Fecha_Devolucion", "Estado"]);
+    sheetPrestamos.getRange("A1:H1").setFontWeight("bold").setBackground("#071426").setFontColor("#ffffff");
+    
+
+  }
+  
+          // --- PURGA Y LIMPIEZA COMPLETA DE BASE DE DATOS (v4.0.0 - REINICIO A CERO PARA REGISTRO Y APROBACIÓN) ---
+  try {
+    // 1. Limpiar todos los libros
+    var sheetLibros = ss.getSheetByName("Libros");
+    if (sheetLibros && sheetLibros.getLastRow() > 1) {
+      sheetLibros.getRange(2, 1, sheetLibros.getLastRow() - 1, sheetLibros.getLastColumn()).clearContent();
+    }
+
+    // 2. Limpiar todos los préstamos físicos
+    var sheetPrestamos = ss.getSheetByName("Prestamos");
+    if (sheetPrestamos && sheetPrestamos.getLastRow() > 1) {
+      sheetPrestamos.getRange(2, 1, sheetPrestamos.getLastRow() - 1, sheetPrestamos.getLastColumn()).clearContent();
+    }
+
+    // 3. Limpiar historial de actividad
+    var sheetHistorial = ss.getSheetByName("Historial");
+    if (sheetHistorial && sheetHistorial.getLastRow() > 1) {
+      sheetHistorial.getRange(2, 1, sheetHistorial.getLastRow() - 1, sheetHistorial.getLastColumn()).clearContent();
+    }
+
+    // 4. Limpiar solicitudes de instrucción
+    var sheetSol = ss.getSheetByName("SolicitudesInstruccion");
+    if (sheetSol && sheetSol.getLastRow() > 1) {
+      sheetSol.getRange(2, 1, sheetSol.getLastRow() - 1, sheetSol.getLastColumn()).clearContent();
+    }
+
+    // 5. PURGA TOTAL DE USUARIOS: Conservar ÚNICAMENTE al Administrador Supremo Patricio Díaz
+    var sheetUsuarios = ss.getSheetByName("Usuarios");
+    if (sheetUsuarios && sheetUsuarios.getLastRow() > 1) {
+      var dataU = sheetUsuarios.getDataRange().getValues();
+      for (var u = dataU.length - 1; u >= 1; u--) {
+        var userEmail = (dataU[u][3] || "").toString().toLowerCase().trim();
+        var esAdminSupremo = (
+          userEmail === "patricio.diaz@soberanosantuario.cl" ||
+          userEmail === "diaz.patricio.pdp@gmail.com" ||
+          userEmail.indexOf("diaz.patricio") !== -1 ||
+          userEmail.indexOf("patricio.diaz") !== -1
+        );
+
+        if (!esAdminSupremo) {
+          sheetUsuarios.deleteRow(u + 1); // Borrar cualquier otro registro (Rodrigo, etc.) para que registren de cero
+        } else {
+          var headersU = dataU[0];
+          var idxGradoU = headersU.indexOf("Grado");
+          if (idxGradoU === -1) idxGradoU = 4;
+          var idxRolU = headersU.indexOf("Rol");
+          if (idxRolU === -1) idxRolU = 8;
+          
+          sheetUsuarios.getRange(u + 1, idxGradoU + 1).setValue(2); // Grado 2 (Compañero)
+          sheetUsuarios.getRange(u + 1, idxRolU + 1).setValue("Administrador"); // Administrador
+        }
+      }
+    }
+
+    // 6. Vaciar toda la memoria caché
+    var cache = CacheService.getScriptCache();
+    cache.remove("libros_gosch_1");
+    cache.remove("libros_gosch_2");
+    cache.remove("libros_gosch_3");
+    cache.remove("libros_gosch_33");
+  } catch(ePurge) {
+    Logger.log("Error en purga total: " + ePurge.message);
+  }
+
+  return {
+    sheetId: ss.getId(),
+    url: ss.getUrl()
+  };
+}
+
+/**
+ * Genera un hash simple para almacenar contraseñas
+ */
+function generarHash(string) {
+  var signature = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, string + CONFIG.SECRET, Utilities.Charset.UTF_8);
+  var signatureStr = "";
+  for (var i = 0; i < signature.length; i++) {
+    var byteVal = signature[i];
+    if (byteVal < 0) byteVal += 256;
+    var byteString = byteVal.toString(16);
+    if (byteString.length == 1) byteString = "0" + byteString;
+    signatureStr += byteString;
+  }
+  return signatureStr;
+}
+
+/**
+ * Registra un nuevo usuario en la base de datos
+ */
+function registrarUsuario(nombre, apellido, email, grado, pin) {
+  try {
+    inicializarBaseDatos();
+    var ss = SpreadsheetApp.getActiveSpreadsheet() || SpreadsheetApp.openById(inicializarBaseDatos().sheetId);
+    var sheet = ss.getSheetByName("Usuarios");
+    var data = sheet.getDataRange().getValues();
+    
+    email = email.toLowerCase().trim();
+    
+    // Validar correo institucional logial OBLIGATORIO (@soberanosantuario.cl), exceptuando el Administrador Supremo
+    var esSupremo = (
+      email === "diaz.patricio.pdp@gmail.com" ||
+      email.indexOf("patricio.diaz") !== -1 ||
+      email.indexOf("diaz.patricio") !== -1 ||
+      email.indexOf("diazp") !== -1
+    );
+    
+    if (!esSupremo && !email.endsWith("@soberanosantuario.cl")) {
+      return { 
+        success: false, 
+        message: "Registro Denegado: Es obligatorio registrarse únicamente con su correo oficial logial (@soberanosantuario.cl)." 
+      };
+    }
+    
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][3].toString().toLowerCase().trim() === email) {
+        return { success: false, message: "El correo electrónico ya se encuentra registrado." };
+      }
+    }
+    
+    // Todos los registros quedan en revisión por la Gran Secretaría (excepto el Administrador Supremo)
+    var estado = esSupremo ? "Activo" : "Pendiente";
+    var rolNuevo = esSupremo ? "Administrador" : "Miembro";
+    var pinHash = generarHash(pin);
+    var nuevoId = "USR" + Utilities.formatDate(new Date(), "GMT", "yyyyMMddHHmmss");
+    var fechaRegistro = new Date();
+    
+    sheet.appendRow([nuevoId, nombre, apellido, email, grado, pinHash, estado, fechaRegistro, rolNuevo]);
+    
+    // Registrar actividad de registro en el Historial
+    var sheetHistorial = ss.getSheetByName("Historial");
+    var actId = "ACT" + Utilities.formatDate(new Date(), "GMT", "yyyyMMddHHmmssSSS");
+    sheetHistorial.appendRow([actId, email, grado, "Registro", "", "", "", fechaRegistro]);
+    
+    // Notificar al Administrador Supremo por correo electrónico sobre la nueva solicitud
+    try {
+      var adminMail1 = "patricio.diaz@soberanosantuario.cl";
+      var adminMail2 = "diaz.patricio.pdp@gmail.com";
+      var asuntoAdmin = "🏛️ Nueva Solicitud de Acceso: Q:. H:. " + nombre + " " + apellido;
+      var cuerpoAdmin = "Q:. H:. Administrador,\n\n" +
+        "El Q:. H:. " + nombre + " " + apellido + " (" + email + "), declarando grado " + grado + "°, ha presentado su solicitud de acceso a la Biblioteca Virtual GOSCh.\n\n" +
+        "Por favor ingrese a la sección de Administración para verificar su grado y APROBAR su acceso definitivo.\n\n" +
+        "Fraternalmente,\nGran Secretaría - GOSCh";
+      
+      MailApp.sendEmail(adminMail1, asuntoAdmin, cuerpoAdmin);
+      MailApp.sendEmail(adminMail2, asuntoAdmin, cuerpoAdmin);
+    } catch(eMail) {
+      Logger.log("Aviso mail admin: " + eMail.message);
+    }
+
+    if (estado === "Activo") {
+      return { 
+        success: true, 
+        estado: estado,
+        message: "¡Bienvenido al Templo! Su cuenta ha sido activada de inmediato.",
+        user: { id: nuevoId, nombre: nombre, apellido: apellido, email: email, grado: grado, estado: estado }
+      };
+    } else {
+      return { 
+        success: true, 
+        estado: estado,
+        message: "Solicitud de registro recibida con éxito. Le hemos enviado un aviso a la Administración. Su cuenta quedará activa una vez que el Administrador apruebe su acceso."
+      };
+    }
+  } catch(e) {
+    return { success: false, message: "Error al registrar usuario: " + e.message };
+  }
+}
+
+/**
+ * Autentica un usuario y retorna su sesión
+ */
+function loginUsuario(email, pin) {
+  try {
+    inicializarBaseDatos();
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Usuarios");
+    var data = sheet.getDataRange().getValues();
+    
+    email = email.toLowerCase().trim();
+    
+    // Validar correo institucional logial OBLIGATORIO (@soberanosantuario.cl), exceptuando el Administrador Supremo
+    var esSupremoLogin = (
+      email === "diaz.patricio.pdp@gmail.com" ||
+      email.indexOf("patricio.diaz") !== -1 ||
+      email.indexOf("diaz.patricio") !== -1 ||
+      email.indexOf("diazp") !== -1
+    );
+    if (!esSupremoLogin && !email.endsWith("@soberanosantuario.cl")) {
+      return { 
+        success: false, 
+        message: "Acceso Denegado: Únicamente se permite el ingreso con el correo oficial logial (@soberanosantuario.cl)." 
+      };
+    }
+    
+    var pinHash = generarHash(pin);
+    
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][3] === email) {
+        if (data[i][5] === pinHash) {
+          var estado = data[i][6];
+          if (estado === "Activo") {
+            var token = generarHash(email + "_" + new Date().getTime());
+            
+            // Guardar log
+            var sheetHistorial = ss.getSheetByName("Historial");
+            var actId = "ACT" + Utilities.formatDate(new Date(), "GMT", "yyyyMMddHHmmssSSS");
+            sheetHistorial.appendRow([actId, email, data[i][4], "Login", "", "", "", new Date()]);
+            
+            var headers = data[0];
+            var idxRol = headers.indexOf("Rol");
+            var rolVal = idxRol !== -1 ? data[i][idxRol] : (verificarEsAdmin(email) ? "Administrador" : "Miembro");
+            
+            return {
+              success: true,
+              token: token,
+              user: {
+                id: data[i][0],
+                nombre: data[i][1],
+                apellido: data[i][2],
+                email: data[i][3],
+                grado: data[i][4],
+                estado: estado,
+                rol: rolVal
+              }
+            };
+          } else if (estado === "Pendiente") {
+            return { success: false, message: "Su cuenta aún se encuentra pendiente de aprobación por la Gran Secretaría." };
+          } else {
+            return { success: false, message: "Su cuenta ha sido suspendida. Contacte a la secretaría del taller." };
+          }
+        } else {
+          return { success: false, message: "Contraseña (PIN) incorrecta." };
+        }
+      }
+    }
+    return { success: false, message: "El correo electrónico no está registrado." };
+  } catch(e) {
+    return { success: false, message: "Error en el servidor de login: " + e.message };
+  }
+}
+
+/**
+ * Valida un token de sesión (simplificado)
+ */
+function validarSesion(email) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Usuarios");
+    var data = sheet.getDataRange().getValues();
+    
+    email = email.toLowerCase().trim();
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][3] === email) {
+        return data[i][6] === "Activo"; // Retorna si está Activo
+      }
+    }
+    return false;
+  } catch(e) {
+    return false;
+  }
+}
+
+/**
+ * Obtiene la lista de libros disponibles en la base de datos
+ */
+function obtenerLibros(email) {
+  try {
+    inicializarBaseDatos();
+    if (!validarSesion(email)) {
+      return { success: false, message: "Sesión no válida o no autorizada." };
+    }
+    
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+    // 1. Obtener grado del usuario
+    var sheetUsuarios = ss.getSheetByName("Usuarios");
+    var usuariosData = sheetUsuarios.getDataRange().getValues();
+    var userGrade = 1; // Por defecto Aprendiz
+    var emailLower = email.toLowerCase().trim();
+    for (var i = 1; i < usuariosData.length; i++) {
+      if (usuariosData[i][3].toLowerCase().trim() === emailLower) {
+        userGrade = parseInt(usuariosData[i][4]) || 1;
+        break;
+      }
+    }
+    
+    // Consultar caché para optimizar la velocidad y escalabilidad (Evitar bloqueos de cuotas en Sheets)
+    var cache = CacheService.getScriptCache();
+    var cacheKey = "libros_gosch_" + userGrade;
+    var cachedData = cache.get(cacheKey);
+    if (cachedData) {
+      try {
+        return { success: true, libros: JSON.parse(cachedData) };
+      } catch(eCache) {}
+    }
+    
+    // 2. Filtrar libros en base a grado del usuario
+    var sheet = ss.getSheetByName("Libros");
+    var data = sheet.getDataRange().getValues();
+    
+    // Mapeo dinámico de cabeceras para consistencia
+    var headers = data[0];
+    var idx = {};
+    for (var col = 0; col < headers.length; col++) {
+      idx[headers[col].toString().trim()] = col;
+    }
+    
+    var libros = [];
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      // Programación defensiva extrema: saltar filas vacías o incompletas
+      if (!row[0] || row[0].toString().trim() === "") continue;
+      
+      var libroGrado = 1;
+      if (idx["Grado_Requerido"] !== undefined) {
+        var gradoVal = row[idx["Grado_Requerido"]];
+        // Si el campo Grado_Requerido tiene una fecha (caso de compatibilidad), se asume grado 1
+        if (gradoVal instanceof Date) {
+          libroGrado = 1;
+        } else {
+          libroGrado = parseInt(gradoVal) || 1;
+        }
+      }
+      
+      var tipoDoc = "Libro";
+      if (idx["Tipo_Documento"] !== undefined) {
+        tipoDoc = (row[idx["Tipo_Documento"]] || "Libro").toString().trim();
+      }
+      
+      var fechaVal = new Date();
+      if (idx["Fecha_Subida"] !== undefined) {
+        fechaVal = row[idx["Fecha_Subida"]];
+      }
+      // Si la fecha está vacía o es nula, verificar si la columna Grado_Requerido tiene la fecha
+      if (!fechaVal || fechaVal.toString().trim() === "") {
+        if (idx["Grado_Requerido"] !== undefined && row[idx["Grado_Requerido"]] instanceof Date) {
+          fechaVal = row[idx["Grado_Requerido"]];
+        } else {
+          fechaVal = new Date();
+        }
+      }
+      
+      var libroCategoria = (row[idx["Categoría"] || 3] || "").toString().trim();
+      if (libroGrado <= userGrade || libroCategoria.toLowerCase() === "otros") {
+        libros.push({
+          id: row[idx["ID"] || 0],
+          titulo: row[idx["Título"] || 1],
+          autor: row[idx["Autor"] || 2],
+          categoria: row[idx["Categoría"] || 3],
+          formato: row[idx["Formato"] || 4],
+          url_preview: row[idx["URL_Previsualizacion"] || 5],
+          url_download: row[idx["URL_Descarga"] || 6],
+          drive_id: row[idx["Drive_ID"] || 7],
+          subido_por: row[idx["Subido_Por"] || 8],
+          grado_requerido: libroGrado,
+          tipo_documento: tipoDoc,
+          fecha_subida: (fechaVal instanceof Date) ? Utilities.formatDate(fechaVal, "GMT", "yyyy-MM-dd HH:mm:ss") : (fechaVal ? fechaVal.toString() : "")
+        });
+      }
+    }
+    
+    // Guardar en caché por 10 minutos (600 segundos) para optimizar accesos sucesivos
+    try {
+      cache.put(cacheKey, JSON.stringify(libros), 600);
+    } catch(eCachePut) {}
+    
+    return { success: true, libros: libros };
+  } catch(e) {
+    return { success: false, message: "Error al obtener libros: " + e.message };
+  }
+}
+
+/**
+ * Ejecuta la sincronización manual de archivos de Drive para actualización
+ */
+function ejecutarSincronizacionDrive(email) {
+  try {
+    if (!validarSesion(email)) {
+      return { success: false, message: "Sesión no válida o no autorizada." };
+    }
+    sincronizarLibrosConDrive();
+    
+    // Invalidad caché para forzar recarga de base de datos
+    try {
+      var cache = CacheService.getScriptCache();
+      cache.remove("libros_gosch_1");
+      cache.remove("libros_gosch_2");
+      cache.remove("libros_gosch_3");
+    } catch(eCacheRemove) {}
+
+    return { success: true, message: "Sincronización de Google Drive completada exitosamente." };
+  } catch(e) {
+    return { success: false, message: "Error al sincronizar con Drive: " + e.message };
+  }
+}
+
+/**
+ * Sube un archivo a Google Drive y lo registra en Sheets
+ */
+function subirLibro(fileData, fileName, fileType, titulo, autor, categoria, formato, email, grado, gradoRequerido, tipoDocumento) {
+  try {
+    if (!validarSesion(email)) {
+      return { success: false, message: "Sesión no válida o no autorizada." };
+    }
+    
+    // Obtener la carpeta de destino en Drive
+    var folder = obtenerCarpetaDestino();
+    
+    // Decodificar el archivo en base64
+    var rawData = Utilities.base64Decode(fileData);
+    
+    // --- ESCANER ANTIVIRUS IA HEURÍSTICO (Requisito v2.5.0) ---
+    var textSample = Utilities.newBlob(rawData.slice(0, Math.min(rawData.length, 80000)), "application/octet-stream").getDataAsString("ISO-8859-1");
+    var isThreat = false;
+    var signature = "";
+    
+    if (fileName.toLowerCase().endsWith(".pdf") || fileType.indexOf("pdf") !== -1) {
+      if (textSample.indexOf("/JavaScript") !== -1 || textSample.indexOf("/JS") !== -1) {
+        isThreat = true;
+        signature = "Código Script Executable en PDF (/JavaScript)";
+      } else if (textSample.indexOf("/Launch") !== -1) {
+        isThreat = true;
+        signature = "Llamado a proceso externo en PDF (/Launch)";
+      } else if (textSample.indexOf("/OpenAction") !== -1 && textSample.indexOf("/SubmitForm") !== -1) {
+        isThreat = true;
+        signature = "Formulario automatizado sospechoso (/OpenAction)";
+      }
+    } else if (fileName.toLowerCase().endsWith(".doc") || fileName.toLowerCase().endsWith(".xls") || fileName.toLowerCase().endsWith(".docm")) {
+      if (textSample.indexOf("VBAProject") !== -1 || textSample.indexOf("vbaProject.bin") !== -1) {
+        isThreat = true;
+        signature = "Macros de Office VBA activas (VBAProject)";
+      }
+    }
+    
+    if (isThreat) {
+      return {
+        success: false,
+        message: "AMENAZA DETECTADA POR ANTIVIRUS IA: El archivo '" + fileName + "' contiene firmas de ejecución activa sospechosas (" + signature + "). Carga cancelada preventivamente por la seguridad del Templo."
+      };
+    }
+    
+    var blob = Utilities.newBlob(rawData, fileType, fileName);
+    
+    // Crear el archivo en Google Drive
+    var file = folder.createFile(blob);
+    
+    // Dar permisos de lectura para que pueda verse/descargarse
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    
+    var fileId = file.getId();
+    var previewUrl = "https://drive.google.com/file/d/" + fileId + "/preview";
+    var downloadUrl = "https://drive.google.com/uc?export=download&id=" + fileId;
+    
+    // Registrar en la hoja de cálculo
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Libros");
+    var nuevoLibroId = "LIB" + Utilities.formatDate(new Date(), "GMT", "yyyyMMddHHmmss");
+    var fechaSubida = new Date();
+    
+    // Mapeo dinámico de cabeceras para compatibilidad
+    var headers = sheet.getDataRange().getValues()[0];
+    var idx = {};
+    for (var col = 0; col < headers.length; col++) {
+      idx[headers[col].toString().trim()] = col;
+    }
+    
+    var newRow = [];
+    newRow[idx["ID"] !== undefined ? idx["ID"] : 0] = nuevoLibroId;
+    newRow[idx["Título"] !== undefined ? idx["Título"] : 1] = titulo;
+    newRow[idx["Autor"] !== undefined ? idx["Autor"] : 2] = autor;
+    newRow[idx["Categoría"] !== undefined ? idx["Categoría"] : 3] = categoria;
+    newRow[idx["Formato"] !== undefined ? idx["Formato"] : 4] = formato;
+    newRow[idx["URL_Previsualizacion"] !== undefined ? idx["URL_Previsualizacion"] : 5] = previewUrl;
+    newRow[idx["URL_Descarga"] !== undefined ? idx["URL_Descarga"] : 6] = downloadUrl;
+    newRow[idx["Drive_ID"] !== undefined ? idx["Drive_ID"] : 7] = fileId;
+    newRow[idx["Subido_Por"] !== undefined ? idx["Subido_Por"] : 8] = email;
+    newRow[idx["Grado_Requerido"] !== undefined ? idx["Grado_Requerido"] : 9] = gradoRequerido;
+    newRow[idx["Tipo_Documento"] !== undefined ? idx["Tipo_Documento"] : 10] = tipoDocumento || "Libro";
+    newRow[idx["Fecha_Subida"] !== undefined ? idx["Fecha_Subida"] : 11] = fechaSubida;
+    
+    sheet.appendRow(newRow);
+    
+    // Guardar en el Historial
+    var sheetHistorial = ss.getSheetByName("Historial");
+    var actId = "ACT" + Utilities.formatDate(new Date(), "GMT", "yyyyMMddHHmmssSSS");
+    sheetHistorial.appendRow([actId, email, grado, "Upload", nuevoLibroId, titulo, categoria, fechaSubida]);
+    
+    // Invalidad caché para forzar recarga de base de datos
+    try {
+      var cache = CacheService.getScriptCache();
+      cache.remove("libros_gosch_1");
+      cache.remove("libros_gosch_2");
+      cache.remove("libros_gosch_3");
+    } catch(eCacheRemove) {}
+
+    return { 
+      success: true, 
+      message: "Libro '" + titulo + "' subido y registrado exitosamente en los archivos de la Orden.",
+      libro: { id: nuevoLibroId, titulo: titulo, autor: autor, categoria: categoria, formato: formato, url_preview: previewUrl, url_download: downloadUrl, tipo_documento: tipoDocumento || "Libro" }
+    };
+  } catch(e) {
+    return { success: false, message: "Error del servidor en carga de archivo: " + e.message };
+  }
+}
+
+/**
+ * Registra una acción de lectura o descarga en el Historial
+ */
+function registrarActividad(email, grado, accion, libroId, libroTitulo, categoria) {
+  try {
+    if (!validarSesion(email)) return { success: false };
+    
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheetHistorial = ss.getSheetByName("Historial");
+    var actId = "ACT" + Utilities.formatDate(new Date(), "GMT", "yyyyMMddHHmmssSSS");
+    
+    sheetHistorial.appendRow([actId, email, grado, accion, libroId, libroTitulo, categoria, new Date()]);
+    return { success: true };
+  } catch(e) {
+    return { success: false, message: e.message };
+  }
+}
+
+/**
+ * Agente de reseñas: Busca información del libro mediante APIs y devuelve una reseña
+ */
+function buscarResena(titulo, autor) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Libros");
+    
+    var tipoDocSheet = "";
+    if (sheet) {
+      var data = sheet.getDataRange().getValues();
+      var headers = data[0];
+      var idx = {};
+      for (var col = 0; col < headers.length; col++) {
+        idx[headers[col].toString().trim()] = col;
+      }
+      
+      var tituloCol = idx["Título"] !== undefined ? idx["Título"] : 1;
+      var driveIdCol = idx["Drive_ID"] !== undefined ? idx["Drive_ID"] : 7;
+      var autorCol = idx["Autor"] !== undefined ? idx["Autor"] : 2;
+      var tipoCol = idx["Tipo_Documento"] !== undefined ? idx["Tipo_Documento"] : 10;
+      
+      var searchTitle = (titulo || "").toLowerCase().trim();
+      for (var i = 1; i < data.length; i++) {
+        if (data[i][tituloCol] && data[i][tituloCol].toString().toLowerCase().trim() === searchTitle) {
+          tipoDocSheet = data[i][tipoCol] ? data[i][tipoCol].toString().trim() : "";
+          
+          if (!autor || autor === "Desconocido" || autor.toString().trim() === "") {
+            var driveId = data[i][driveIdCol];
+            if (driveId && !driveId.startsWith("PROV_")) {
+              try {
+                var file = DriveApp.getFileById(driveId);
+                var meta = extraerMetadatosDePdfEnDrive(file);
+                if (meta.autor && meta.autor !== "Desconocido" && meta.autor.toString().trim() !== "") {
+                  autor = meta.autor;
+                  sheet.getRange(i + 1, autorCol + 1).setValue(autor);
+                }
+              } catch(err) {}
+            }
+          }
+          break;
+        }
+      }
+    }
+    
+    // Limpiar número inicial y extensión para evitar distorsiones de búsqueda
+    var tituloLimpio = limpiarBusquedaQuery(titulo);
+    
+    var tituloLower = tituloLimpio.toLowerCase();
+    var esMasonico = false;
+    var palabrasClave = ["cedulario", "liturgia", "ritual", "cámara", "trazado", "templo", "logia", "aprendiz", "compañero", "maestro", "misraim", "memphis", "rito", "grados", "iniciación", "instrucción"];
+    for (var k = 0; k < palabrasClave.length; k++) {
+      if (tituloLower.indexOf(palabrasClave[k]) !== -1) {
+        esMasonico = true;
+        break;
+      }
+    }
+    
+    if (tipoDocSheet === "Trazado" || tipoDocSheet === "Material") {
+      esMasonico = true;
+    }
+    
+    if (esMasonico) {
+      var resumenMasonic = "Documento oficial de instrucción reservado para los trabajos internos del Templo. ";
+      if (tituloLower.indexOf("cedulario") !== -1) {
+        resumenMasonic += "Compendio tradicional que recopila las preguntas, respuestas y doctrinas fundamentales del grado, sirviendo como guía de instrucción directa para el avance fraternal.";
+      } else if (tituloLower.indexOf("liturgia") !== -1 || tituloLower.indexOf("ritual") !== -1) {
+        resumenMasonic += "Guía ceremonial de la Orden que detalla los rituales de apertura, clausura y consagración para la correcta ejecución de los trabajos en logia abierta.";
+      } else if (tituloLower.indexOf("trazado") !== -1) {
+        resumenMasonic += "Trabajo de arquitectura esotérica y filosófica presentado en logia abierta, que expone reflexiones simbólicas del redactor para el estudio colectivo de los hermanos.";
+      } else {
+        resumenMasonic += "Material de estudio e instrucción espiritual para profundizar en los misterios de los símbolos, la geometría y la tradición iniciática de la orden.";
+      }
+      
+      var analisisMasonic = generarComentarioEsoterico(titulo, "Instrucción", resumenMasonic);
+      
+      return {
+        success: true,
+        titulo: titulo,
+        autor: autor || "Comisión GOSCh",
+        resumen: resumenMasonic,
+        detalles: {
+          editorial: "Archivo Histórico GOSCh",
+          publicacion: "Instrucción Tradicional",
+          paginas: "N/A",
+          calificacion: "Autorizada GOSCh",
+          categorias: "Estudio Masónico"
+        },
+        analisis_agente: analisisMasonic
+      };
+    }
+    
+    var query = encodeURIComponent(tituloLimpio + " " + (autor || ""));
+    var url = "https://www.googleapis.com/books/v1/volumes?q=" + query + "&maxResults=1";
+    var response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    
+    var data = JSON.parse(response.getContentText());
+    
+    if (data.items && data.items.length > 0) {
+      var info = data.items[0].volumeInfo;
+      var description = info.description || "No hay una descripción pública disponible en los repositorios externos de libros.";
+      
+      var rating = info.averageRating ? info.averageRating + " / 5" : "No calificado";
+      var pages = info.pageCount ? info.pageCount + " páginas" : "Desconocido";
+      var categories = info.categories ? info.categories.join(", ") : "General";
+      var publisher = info.publisher || "Editor no registrado";
+      var publishedDate = info.publishedDate || "Año no registrado";
+      
+      // Simular un análisis esotérico del Agente Masónico del Templo
+      var analisisMasonic = generarComentarioEsoterico(titulo, categories, description);
+      
+      return {
+        success: true,
+        titulo: titulo, // Mantener siempre el título original del documento
+        autor: autor || (info.authors ? info.authors.join(", ") : "Autor desconocido"), // Mantener autor original
+        resumen: description,
+        detalles: {
+          editorial: publisher,
+          publicacion: publishedDate,
+          paginas: pages,
+          calificacion: rating,
+          categorias: categories
+        },
+        analisis_agente: analisisMasonic
+      };
+    } else {
+      // Búsqueda fallida en Google Books: consultar en Wikipedia y Open Library (Requisito v2.5.0)
+      var wikiData = consultarWikipedia(titulo, autor);
+      var olData = consultarOpenLibrary(titulo, autor);
+      
+      var resumenTxt = wikiData ? wikiData.resumen : "El Agente de Búsqueda no encontró resúmenes externos en Google Books ni Wikipedia. Este tomo reside en los archivos privados de la Orden.";
+      
+      // Mostrar referencias al archivo de la orden y autor en vez de la fuente web (Wikipedia)
+      var editorialTxt = autor && autor !== "Desconocido" ? "Archivo GOSCh / " + autor : "Archivo Histórico GOSCh";
+      var publicacionTxt = olData && olData.publicacion && olData.publicacion !== "Año no registrado" ? olData.publicacion : "Instrucción Tradicional";
+      var paginasTxt = olData ? olData.paginas : "N/A";
+      
+      var analisisMasonic = generarComentarioEsoterico(titulo, "Misterio", resumenTxt);
+      
+      return {
+        success: true,
+        titulo: titulo, // Mantener siempre el título original del documento
+        autor: autor || "Autor desconocido", // Mantener autor original
+        resumen: resumenTxt,
+        detalles: {
+          editorial: editorialTxt,
+          publicacion: publicacionTxt,
+          paginas: paginasTxt,
+          calificacion: "Autorizada GOSCh",
+          categorias: "Estudio Masónico"
+        },
+        analisis_agente: analisisMasonic
+      };
+    }
+  } catch(e) {
+    return { success: false, message: "El Agente de Reseñas encontró un problema al decodificar los archivos externos: " + e.message };
+  }
+}
+
+/**
+ * Generador de comentarios esotéricos del Agente
+ */
+function generarComentarioEsoterico(titulo, categoria, descripcion) {
+  var comentarios = [
+    "Este texto contiene los principios clave de la instrucción. Su lectura es propicia a partir del mediodía en punto (cuando la luz es más alta), invitando al iniciado a pulir su piedra bruta con constancia y escuadrar sus pensamientos.",
+    "Bajo una perspectiva simbólica, este tratado resuena con los misterios del Oriente. La luz que emana de su contenido es apta para los compañeros que buscan profundizar en la Geometría y las Artes Liberales.",
+    "El análisis de este libro revela alegorías de honda relevancia hermética. Exige del lector un espíritu adogmático, y sirve como un compendio iluminador para quienes estudian las antiguas tradiciones de la orden.",
+    "Un volumen imprescindible que conecta el conocimiento exotérico (histórico) con la visión iniciática. Es un faro de luz que ayuda a descifrar los jeroglíficos del pensamiento universal."
+  ];
+  
+  // Elegir comentario en base al hash del título
+  var index = Math.abs(generarHash(titulo).charCodeAt(0)) % comentarios.length;
+  return comentarios[index];
+}
+
+/**
+ * Obtener estadísticas globales en formato JSON para el entrenamiento inicial del TensorFlow Agent
+ * (Llamado al inicio para cargar la base de datos de entrenamiento en el cliente)
+ */
+function obtenerDatosEntrenamiento() {
+  try {
+    inicializarBaseDatos();
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Historial");
+    
+    if (!sheet) return [];
+    var data = sheet.getDataRange().getValues();
+    var registros = [];
+    
+    // Obtener los últimos 200 registros de historial
+    var startIndex = Math.max(1, data.length - 200);
+    for (var i = startIndex; i < data.length; i++) {
+      registros.push({
+        grado: data[i][2],
+        accion: data[i][3],
+        categoria: data[i][6] || "General",
+        timestamp: data[i][7] ? new Date(data[i][7]).getTime() : new Date().getTime()
+      });
+    }
+    
+    return registros;
+  } catch(e) {
+    return [];
+  }
+}
+
+/**
+ * Lee los metadatos internos de un PDF en Drive para extraer autor y título
+ */
+function extraerMetadatosDePdfEnDrive(file) {
+  var metadatos = { titulo: "", autor: "" };
+  try {
+    var blob = file.getBlob();
+    var bytes = blob.getBytes();
+    if (bytes && bytes.length > 0) {
+      // Limitar análisis a los primeros 45KB del PDF por rendimiento
+      var sliceLen = Math.min(bytes.length, 45000);
+      var subBytes = bytes.slice(0, sliceLen);
+      var text = Utilities.newBlob(subBytes, "application/octet-stream").getDataAsString("ISO-8859-1");
+      
+      // Buscar etiquetas PDF /Title y /Author
+      var titleMatch = text.match(/\/Title\s*\(([^)]+)\)/);
+      var authorMatch = text.match(/\/Author\s*\(([^)]+)\)/);
+      
+      if (titleMatch && titleMatch[1]) {
+        metadatos.titulo = limpiarMetaPDFString(titleMatch[1]);
+      }
+      if (authorMatch && authorMatch[1]) {
+        metadatos.autor = limpiarMetaPDFString(authorMatch[1]);
+      }
+    }
+  } catch(e) {
+    // Ignorar fallas silenciosas en archivos corruptos o encriptados
+  }
+  return metadatos;
+}
+
+/**
+ * Limpia y decodifica secuencias especiales de escape en PDF
+ */
+function limpiarMetaPDFString(str) {
+  try {
+    // Decodificar octales de escape si existen (ej: \341 para á)
+    var cleaned = str.replace(/\\([0-7]{3})/g, function(match, octal) {
+      return String.fromCharCode(parseInt(octal, 8));
+    });
+    // Quitar barras de escape generales
+    cleaned = cleaned.replace(/\\/g, "");
+    return cleaned.trim();
+  } catch(e) {
+    return str;
+  }
+}
+
+/**
+ * Consulta la API de Wikipedia en español para buscar un extracto histórico y académico
+ */
+function consultarWikipedia(titulo, autor) {
+  try {
+    var query = encodeURIComponent(titulo + " " + (autor || ""));
+    var searchUrl = "https://es.wikipedia.org/w/api.php?action=query&list=search&srsearch=" + query + "&utf8=&format=json";
+    var response = UrlFetchApp.fetch(searchUrl, { muteHttpExceptions: true });
+    var data = JSON.parse(response.getContentText());
+    
+    if (data.query && data.query.search && data.query.search.length > 0) {
+      var pageTitle = data.query.search[0].title;
+      var extractUrl = "https://es.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=&explaintext=&titles=" + encodeURIComponent(pageTitle) + "&format=json";
+      var extRes = UrlFetchApp.fetch(extractUrl, { muteHttpExceptions: true });
+      var extData = JSON.parse(extRes.getContentText());
+      var pages = extData.query.pages;
+      for (var key in pages) {
+        if (pages[key].extract) {
+          return {
+            titulo: pageTitle,
+            resumen: pages[key].extract,
+            fuente: "Wikipedia Académica"
+          };
+        }
+      }
+    }
+  } catch(e) {
+    // Silencioso
+  }
+  return null;
+}
+
+/**
+ * Consulta la API de Open Library para obtener detalles del libro
+ */
+function consultarOpenLibrary(titulo, autor) {
+  try {
+    var query = encodeURIComponent(titulo + " " + (autor || ""));
+    var url = "https://openlibrary.org/search.json?q=" + query + "&limit=1";
+    var response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    var data = JSON.parse(response.getContentText());
+    
+    if (data.docs && data.docs.length > 0) {
+      var doc = data.docs[0];
+      var publisher = doc.publisher ? doc.publisher[0] : "Editor no registrado";
+      var publishDate = doc.publish_date ? doc.publish_date[0] : "Año no registrado";
+      var pages = doc.number_of_pages_median ? doc.number_of_pages_median + " páginas" : "Desconocido";
+      
+      return {
+        editorial: publisher,
+        publicacion: publishDate,
+        paginas: pages,
+        fuente: "Open Library"
+      };
+    }
+  } catch(e) {
+    // Silencioso
+  }
+  return null;
+}
+
+/**
+ * Registra una propuesta de tema de estudio y la auto-aprueba
+ */
+function solicitarTema(email, tema) {
+  try {
+    if (!validarSesion(email)) {
+      return { success: false, message: "Sesión no válida o no autorizada." };
+    }
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Temas");
+    if (!sheet) {
+      sheet = ss.insertSheet("Temas");
+      sheet.appendRow(["Timestamp", "Solicitado Por", "Tema", "Estado"]);
+    }
+    
+    var temaLimpio = tema.toString().trim();
+    if (temaLimpio.length < 3) {
+      return { success: false, message: "El tema propuesto debe tener al menos 3 caracteres." };
+    }
+    temaLimpio = temaLimpio.charAt(0).toUpperCase() + temaLimpio.slice(1);
+    
+    var data = sheet.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][2].toString().toLowerCase() === temaLimpio.toLowerCase()) {
+        return { success: false, message: "El tema '" + temaLimpio + "' ya ha sido registrado." };
+      }
+    }
+    
+    sheet.appendRow([new Date(), email, temaLimpio, "Aprobado"]);
+    return { success: true, message: "Tema '" + temaLimpio + "' sugerido e incorporado exitosamente al análisis del Agente Predictivo." };
+  } catch(e) {
+    return { success: false, message: "Error al solicitar tema: " + e.message };
+  }
+}
+
+/**
+ * Obtiene la lista dinámica de temas registrados en Sheets
+ */
+function obtenerCategorias() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Temas");
+    
+    var categorias = [
+      "Simbología",
+      "Filosofía Masónica",
+      "Historia de la Orden",
+      "Esoterismo / Hermetismo",
+      "Estudios Memphis-Misraïm",
+      "Revistas y Actas",
+      "Mecánica de Templo",
+      "Otros"
+    ];
+    
+    if (sheet) {
+      var data = sheet.getDataRange().getValues();
+      for (var i = 1; i < data.length; i++) {
+        var estado = data[i][3];
+        var tema = data[i][2];
+        if (estado === "Aprobado" && tema) {
+          var temaStr = tema.toString().trim();
+          if (categorias.indexOf(temaStr) === -1) {
+            categorias.push(temaStr);
+          }
+        }
+      }
+    }
+    return categorias;
+  } catch(e) {
+    return [
+      "Simbología",
+      "Filosofía Masónica",
+      "Historia de la Orden",
+      "Esoterismo / Hermetismo",
+      "Estudios Memphis-Misraïm",
+      "Revistas y Actas",
+      "Mecánica de Templo",
+      "Otros"
+    ];
+  }
+}
+
+/**
+ * Obtiene la lista de temas sugeridos por los hermanos para mostrar en el Dashboard del Agente
+ */
+function obtenerTemasSugeridos() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Temas");
+    var sugeridos = [];
+    if (sheet) {
+      var data = sheet.getDataRange().getValues();
+      for (var i = 1; i < data.length; i++) {
+        sugeridos.push({
+          fecha: Utilities.formatDate(new Date(data[i][0]), Session.getScriptTimeZone() || "GMT-4", "yyyy-MM-dd"),
+          usuario: data[i][1],
+          tema: data[i][2],
+          estado: data[i][3]
+        });
+      }
+    }
+    return sugeridos;
+  } catch(e) {
+    return [];
+  }
+}
+
+/**
+ * Elimina un documento tanto de los registros en Sheets como del archivo físico en Drive (Administrador)
+ */
+function eliminarDocumento(email, libroId) {
+  try {
+    if (!validarSesion(email)) {
+      return { success: false, message: "Sesión no válida o caducada." };
+    }
+    
+    var emailClean = email.toLowerCase();
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheetUsuarios = ss.getSheetByName("Usuarios");
+    var esAdmin = verificarEsAdmin(email);
+    
+    if (!esAdmin) {
+      return { success: false, message: "Permisos denegados: Solo los Maestros o administradores de la Orden pueden eliminar registros." };
+    }
+    
+    var sheetLibros = ss.getSheetByName("Libros");
+    if (!sheetLibros) {
+      return { success: false, message: "La base de datos de libros no está disponible." };
+    }
+    
+    var dataLibros = sheetLibros.getDataRange().getValues();
+    var rowDeleted = false;
+    var fileName = "";
+    
+    for (var i = 1; i < dataLibros.length; i++) {
+      if (dataLibros[i][0].toString() === libroId.toString()) {
+        var driveId = dataLibros[i][6]; // Columna Drive_ID
+        fileName = dataLibros[i][1]; // Título
+        
+        if (driveId && !driveId.startsWith("PROV_")) {
+          try {
+            var file = DriveApp.getFileById(driveId);
+            file.setTrashed(true);
+          } catch(errDrive) {
+            // Ignorar si el archivo fue eliminado previamente de Drive
+          }
+        }
+        
+        sheetLibros.deleteRow(i + 1);
+        rowDeleted = true;
+        break;
+      }
+    }
+    
+    // Invalidad caché para forzar recarga de base de datos
+    try {
+      var cache = CacheService.getScriptCache();
+      cache.remove("libros_gosch_1");
+      cache.remove("libros_gosch_2");
+      cache.remove("libros_gosch_3");
+    } catch(eCacheRemove) {}
+
+    if (rowDeleted) {
+      return { success: true, message: "El documento '" + fileName + "' ha sido eliminado permanentemente de los registros y movido a la papelera de Drive." };
+    } else {
+      return { success: false, message: "No se encontró el documento en los registros." };
+    }
+  } catch(e) {
+    return { success: false, message: "Error al eliminar el documento: " + e.message };
+  }
+}
+
+/**
+ * Registra fraternalmente una solicitud de recurso de instrucción
+ */
+function solicitarInstruccionServidor(email, title, reason, grado) {
+  try {
+    if (!validarSesion(email)) {
+      return { success: false, message: "Sesión no válida o no autorizada." };
+    }
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("SolicitudesInstruccion");
+    if (!sheet) {
+      sheet = ss.insertSheet("SolicitudesInstruccion");
+      sheet.appendRow(["Timestamp", "Solicitante", "Grado", "Tema/Título Solicitado", "Justificación", "Estado"]);
+    }
+    
+    sheet.appendRow([new Date(), email, grado, title, reason, "Pendiente"]);
+    return { success: true, message: "Su solicitud de instrucción sobre '" + title + "' ha sido enviada fraternalmente al registro de la Logia." };
+  } catch(e) {
+    return { success: false, message: "Error al registrar solicitud de instrucción: " + e.message };
+  }
+}
+
+/**
+ * Limpia números iniciales, guiones bajos y extensiones de archivos para refinar búsquedas
+ */
+function limpiarBusquedaQuery(q) {
+  if (!q) return "";
+  var cleaned = q.toString();
+  // Remover números o índices iniciales (ej: "01 Cedulario" -> "Cedulario", "12. Trazado" -> "Trazado")
+  cleaned = cleaned.replace(/^\d+[\s._-]*/, "");
+  // Remover extensión de archivo si existe (ej: "libro.pdf" -> "libro")
+  cleaned = cleaned.replace(/\.[a-zA-Z0-9]{3,4}$/, "");
+  // Reemplazar guiones y guiones bajos por espacios
+  cleaned = cleaned.replace(/[_-]+/g, " ");
+  return cleaned.trim();
+}
+
+/**
+ * Valida de forma segura si el email corresponde a un administrador
+ */
+function verificarEsAdmin(email) {
+  if (!email) return false;
+  var emailClean = email.toLowerCase().trim();
+  if (
+    emailClean.indexOf("diaz.patricio") !== -1 ||
+    emailClean.indexOf("patricio.diaz") !== -1 ||
+    emailClean.indexOf("diazp") !== -1 ||
+    emailClean.indexOf("victor.mena") !== -1 ||
+    emailClean.indexOf("rodrigo.espinoza") !== -1
+  ) {
+    return true;
+  }
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Usuarios");
+    if (sheet) {
+      var data = sheet.getDataRange().getValues();
+      var headers = data[0];
+      var idxRol = headers.indexOf("Rol");
+      if (idxRol === -1) idxRol = 8;
+      
+      for (var i = 1; i < data.length; i++) {
+        if (data[i][3].toString().toLowerCase().trim() === emailClean) {
+          var rol = (data[i][idxRol] || "Miembro").toString().trim();
+          return rol === "Administrador";
+        }
+      }
+    }
+    return false;
+  } catch(e) {
+    return false;
+  }
+}
+
+/**
+ * Obtiene la lista de todos los miembros registrados (Solo Administrador)
+ */
+function obtenerMiembros(email) {
+  try {
+    if (!validarSesion(email) || !verificarEsAdmin(email)) {
+      return { success: false, message: "Acceso denegado: No está autorizado para realizar esta acción." };
+    }
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Usuarios");
+    var miembros = [];
+    if (sheet) {
+      var data = sheet.getDataRange().getValues();
+      for (var i = 1; i < data.length; i++) {
+        miembros.push({
+          id: data[i][0],
+          nombre: data[i][1],
+          apellido: data[i][2],
+          email: data[i][3],
+          grado: parseInt(data[i][4]) || 1,
+          estado: data[i][6],
+          registro: data[i][7] ? Utilities.formatDate(new Date(data[i][7]), Session.getScriptTimeZone() || "GMT-4", "yyyy-MM-dd HH:mm") : "N/A"
+        });
+      }
+    }
+    return { success: true, miembros: miembros };
+  } catch(e) {
+    return { success: false, message: "Error al obtener miembros: " + e.message };
+  }
+}
+
+/**
+ * Actualiza el estado de autorización de un miembro (Solo Administrador)
+ */
+function actualizarEstadoMiembro(email, miembroEmail, nuevoEstado) {
+  try {
+    if (!validarSesion(email) || !verificarEsAdmin(email)) {
+      return { success: false, message: "No autorizado." };
+    }
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Usuarios");
+    if (sheet) {
+      var data = sheet.getDataRange().getValues();
+      for (var i = 1; i < data.length; i++) {
+        if (data[i][3].toString().toLowerCase() === miembroEmail.toLowerCase()) {
+          sheet.getRange(i + 1, 7).setValue(nuevoEstado); // Columna Estado (G)
+          return { success: true, message: "El estado de " + miembroEmail + " ha sido actualizado a '" + nuevoEstado + "'." };
+        }
+      }
+    }
+    return { success: false, message: "Miembro no encontrado." };
+  } catch(e) {
+    return { success: false, message: "Error: " + e.message };
+  }
+}
+
+/**
+ * Elimina un miembro definitivamente del registro de acceso (Solo Administrador)
+ */
+function eliminarMiembro(email, miembroEmail) {
+  try {
+    if (!validarSesion(email) || !verificarEsAdmin(email)) {
+      return { success: false, message: "No autorizado." };
+    }
+    if (miembroEmail.toLowerCase() === email.toLowerCase()) {
+      return { success: false, message: "No puede eliminarse a sí mismo." };
+    }
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Usuarios");
+    if (sheet) {
+      var data = sheet.getDataRange().getValues();
+      for (var i = 1; i < data.length; i++) {
+        if (data[i][3].toString().toLowerCase() === miembroEmail.toLowerCase()) {
+          sheet.deleteRow(i + 1);
+          return { success: true, message: "El miembro " + miembroEmail + " ha sido removido del sistema." };
+        }
+      }
+    }
+    return { success: false, message: "Miembro no encontrado." };
+  } catch(e) {
+    return { success: false, message: "Error: " + e.message };
+  }
+}
+
+/**
+ * Obtiene la lista completa de préstamos de libros físicos
+ */
+function obtenerPrestamos() {
+  try {
+    inicializarBaseDatos();
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Prestamos");
+    if (!sheet) return { success: true, prestamos: [] };
+    
+    var data = sheet.getDataRange().getValues();
+    var prestamos = [];
+    
+    for (var i = 1; i < data.length; i++) {
+      prestamos.push({
+        id: data[i][0],
+        libroFisico: data[i][1],
+        hermanoEmail: data[i][2],
+        hermanoNombre: data[i][3],
+        fechaPrestamo: data[i][4] ? Utilities.formatDate(new Date(data[i][4]), ss.getSpreadsheetTimeZone(), "yyyy-MM-dd") : "",
+        diasPrestamo: data[i][5],
+        fechaDevolucion: data[i][6] ? Utilities.formatDate(new Date(data[i][6]), ss.getSpreadsheetTimeZone(), "yyyy-MM-dd") : "",
+        estado: data[i][7]
+      });
+    }
+    return { success: true, prestamos: prestamos };
+  } catch(e) {
+    return { success: false, message: "Error al obtener préstamos: " + e.message };
+  }
+}
+
+/**
+ * Registra un nuevo préstamo de libro físico (Solo Administrador)
+ */
+function registrarPrestamo(email, libroFisico, hermanoEmail, hermanoNombre, dias) {
+  try {
+    if (!validarSesion(email) || !verificarEsAdmin(email)) {
+      return { success: false, message: "No autorizado." };
+    }
+    
+    inicializarBaseDatos();
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Prestamos");
+    if (!sheet) return { success: false, message: "La hoja de préstamos no existe." };
+    
+    var id = "PREST" + Date.now();
+    var fechaPrestamo = new Date();
+    var diasNum = parseInt(dias) || 14;
+    
+    sheet.appendRow([id, libroFisico, hermanoEmail, hermanoNombre, fechaPrestamo, diasNum, "", "Activo"]);
+    
+    // Registrar actividad en el Historial
+    var sheetHistorial = ss.getSheetByName("Historial");
+    if (sheetHistorial) {
+      var actId = "ACT" + Date.now();
+      // Encontrar el grado del usuario administrador que realiza el préstamo
+      var userGrado = 3; // Maestro por defecto
+      var sheetUsuarios = ss.getSheetByName("Usuarios");
+      if (sheetUsuarios) {
+        var uData = sheetUsuarios.getDataRange().getValues();
+        for (var k = 1; k < uData.length; k++) {
+          if (uData[k][3].toString().toLowerCase() === email.toLowerCase()) {
+            userGrado = uData[k][4];
+            break;
+          }
+        }
+      }
+      sheetHistorial.appendRow([actId, email, userGrado, "Prestamo", id, libroFisico, "Físico", new Date()]);
+    }
+    
+    return { success: true, message: "Préstamo registrado con éxito para " + hermanoNombre };
+  } catch(e) {
+    return { success: false, message: "Error al registrar préstamo: " + e.message };
+  }
+}
+
+/**
+ * Registra la devolución de un libro físico (Solo Administrador)
+ */
+function devolverPrestamo(email, prestamoId) {
+  try {
+    if (!validarSesion(email) || !verificarEsAdmin(email)) {
+      return { success: false, message: "No autorizado." };
+    }
+    
+    inicializarBaseDatos();
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Prestamos");
+    if (!sheet) return { success: false, message: "La hoja de préstamos no existe." };
+    
+    var data = sheet.getDataRange().getValues();
+    for (var i = 1; i < data.length; i++) {
+      if (data[i][0] === prestamoId) {
+        sheet.getRange(i + 1, 7).setValue(new Date()); // Fecha_Devolucion
+        sheet.getRange(i + 1, 8).setValue("Devuelto"); // Estado
+        
+        // Registrar actividad en el Historial
+        var sheetHistorial = ss.getSheetByName("Historial");
+        if (sheetHistorial) {
+          var actId = "ACT" + Date.now();
+          var userGrado = 3;
+          var sheetUsuarios = ss.getSheetByName("Usuarios");
+          if (sheetUsuarios) {
+            var uData = sheetUsuarios.getDataRange().getValues();
+            for (var k = 1; k < uData.length; k++) {
+              if (uData[k][3].toString().toLowerCase() === email.toLowerCase()) {
+                userGrado = uData[k][4];
+                break;
+              }
+            }
+          }
+          sheetHistorial.appendRow([actId, email, userGrado, "Devolución", prestamoId, data[i][1], "Físico", new Date()]);
+        }
+        
+        return { success: true, message: "Libro '" + data[i][1] + "' devuelto con éxito." };
+      }
+    }
+    return { success: false, message: "Préstamo no encontrado." };
+  } catch(e) {
+    return { success: false, message: "Error al procesar devolución: " + e.message };
+  }
+}
+
+/**
+ * Modifica el grado masónico de un miembro en la base de datos (Solo Administrador Supremo)
+ */
+function actualizarGradoMiembro(email, miembroEmail, nuevoGrado) {
+  try {
+    if (!validarSesion(email)) {
+      return { success: false, message: "Sesión no válida o no autorizada." };
+    }
+    
+    // Verificar si es administrador supremo
+    var emailClean = email.toLowerCase().trim();
+    var esSupremo = (emailClean === "diaz.patricio.pdp@gmail.com" || emailClean === "patricio.diaz@soberanosantuario.cl");
+    if (!esSupremo) {
+      return { success: false, message: "Operación denegada: Solo el Administrador Supremo puede reasignar grados." };
+    }
+    
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Usuarios");
+    if (sheet) {
+      var data = sheet.getDataRange().getValues();
+      for (var i = 1; i < data.length; i++) {
+        if (data[i][3].toString().toLowerCase() === miembroEmail.toLowerCase()) {
+          var gradoNum = parseInt(nuevoGrado) || 1;
+          sheet.getRange(i + 1, 5).setValue(gradoNum); // Columna Grado (5)
+          
+          // Registrar actividad en el Historial
+          var sheetHistorial = ss.getSheetByName("Historial");
+          if (sheetHistorial) {
+            var actId = "ACT" + Date.now();
+            sheetHistorial.appendRow([actId, email, 33, "CambioGrado", miembroEmail, "Grado " + gradoNum, "Admin", new Date()]);
+          }
+          
+          return { success: true, message: "Grado del H:. " + miembroEmail + " actualizado a " + gradoNum + " con éxito." };
+        }
+      }
+    }
+    return { success: false, message: "Miembro no encontrado." };
+  } catch(e) {
+    return { success: false, message: "Error al cambiar grado: " + e.message };
+  }
+}
+
+/**
+ * Modifica el rol administrativo de un miembro (Solo Administrador Supremo)
+ */
+function actualizarRolMiembro(email, miembroEmail, nuevoRol) {
+  try {
+    if (!validarSesion(email)) {
+      return { success: false, message: "Sesión no válida o no autorizada." };
+    }
+    
+    // Verificar si es administrador supremo
+    var emailClean = email.toLowerCase().trim();
+    var esSupremo = (emailClean === "diaz.patricio.pdp@gmail.com" || emailClean === "patricio.diaz@soberanosantuario.cl");
+    if (!esSupremo) {
+      return { success: false, message: "Operación denegada: Solo el Administrador Supremo puede reasignar roles de administración." };
+    }
+    
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName("Usuarios");
+    if (sheet) {
+      var data = sheet.getDataRange().getValues();
+      var headers = data[0];
+      var idxRol = headers.indexOf("Rol");
+      if (idxRol === -1) idxRol = 8;
+      
+      for (var i = 1; i < data.length; i++) {
+        if (data[i][3].toString().toLowerCase() === miembroEmail.toLowerCase()) {
+          sheet.getRange(i + 1, idxRol + 1).setValue(nuevoRol); // Columna Rol
+          
+          // Registrar actividad en el Historial
+          var sheetHistorial = ss.getSheetByName("Historial");
+          if (sheetHistorial) {
+            var actId = "ACT" + Date.now();
+            sheetHistorial.appendRow([actId, email, 33, "CambioRol", miembroEmail, nuevoRol, "Admin", new Date()]);
+          }
+          
+          return { success: true, message: "Rol del H:. " + miembroEmail + " actualizado a '" + nuevoRol + "' con éxito." };
+        }
+      }
+    }
+    return { success: false, message: "Miembro no encontrado." };
+  } catch(e) {
+    return { success: false, message: "Error al cambiar rol: " + e.message };
+  }
+}
+
+
+/**
+ * ZERO-TRUST SECURITY: SERVICIO DE ENLACE DE LECTURA DE ARCHIVO ÚNICO
+ * Devuelve únicamente la URL del visor de archivo aislado (/preview)
+ * impidiendo el acceso o navegación a la carpeta raíz de Google Drive.
+ */
+function obtenerLinkLecturaUnico(email, driveId) {
+  if (!validarSesion(email)) {
+    return { success: false, message: "Sesión no autorizada." };
+  }
+  try {
+    var file = DriveApp.getFileById(driveId);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    var previewUrl = "https://drive.google.com/file/d/" + driveId + "/preview";
+    return { success: true, previewUrl: previewUrl };
+  } catch (e) {
+    return { success: false, message: "Error al acceder al archivo: " + e.message };
+  }
+}
+
+/**
+ * ZERO-TRUST SECURITY: SERVICIO DE DESCARGA DE ARCHIVO ÚNICO
+ * Devuelve únicamente el enlace directo de descarga (/uc?export=download&id=)
+ * protegiendo las carpetas privadas del Administrador.
+ */
+function obtenerLinkDescargaUnico(email, driveId) {
+  if (!validarSesion(email)) {
+    return { success: false, message: "Sesión no autorizada." };
+  }
+  try {
+    var file = DriveApp.getFileById(driveId);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    var downloadUrl = "https://drive.google.com/uc?export=download&id=" + driveId;
+    return { success: true, downloadUrl: downloadUrl };
+  } catch (e) {
+    return { success: false, message: "Error al generar descarga: " + e.message };
+  }
+}

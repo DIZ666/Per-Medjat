@@ -1,0 +1,9 @@
+# Temporary check files
+temp_check.js
+*.log
+*.tmp
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
