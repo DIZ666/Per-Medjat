@@ -9,7 +9,7 @@
   <meta name="theme-color" content="#050b14">
   
   <!-- POLITICA DE SEGURIDAD DE CONTENIDOS CSP PARA DEPLIEGUE EN GITHUB PAGES PÚBLICO -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' https://fonts.googleapis.com https://fonts.gstatic.com https://drive.google.com https://script.google.com https://www.googleapis.com data: blob:; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' https://fonts.googleapis.com https://fonts.gstatic.com https://drive.google.com https://script.google.com https://www.googleapis.com data: blob:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com;">
 
   <!-- Google Fonts: Cinzel y Outfit -->
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;800&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -1093,7 +1093,7 @@ function ejecutarAccionBackend(action, params, onSuccess, onError) {
     var payload = Object.assign({ action: action }, params);
     
     // Para lecturas de datos, usar GET directo con query params para máxima compatibilidad con redirecciones 302
-    if (action === "getBooks" || action === "getCalendar" || action === "getNews" || action === "getUsers") {
+    if (action === "getBooks" || action === "getCalendar" || action === "getNews" || action === "getUsers" || action === "login" || action === "register") {
       var queryParts = [];
       for (var key in payload) {
         if (payload.hasOwnProperty(key)) {
