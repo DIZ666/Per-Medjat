@@ -283,6 +283,10 @@ function sincronizarLibrosConDrive() {
         var titulo = dotIdx !== -1 ? fileName.substring(0, dotIdx) : fileName;
         var extension = dotIdx !== -1 ? fileName.substring(dotIdx + 1).toUpperCase() : "PDF";
         
+        // Solo registrar archivos que sean libros (PDF, EPUB, DOC, DOCX)
+        var allowedExtensions = ["PDF", "EPUB", "DOC", "DOCX"];
+        if (allowedExtensions.indexOf(extension) === -1) continue;
+        
         var autor = "Autor no especificado";
         if (titulo.indexOf(" - ") !== -1) {
           var partes = titulo.split(" - ");

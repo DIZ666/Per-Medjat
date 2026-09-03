@@ -567,35 +567,6 @@ h1, h2, h3, h4, h5, .portico-title, .book-card-title, .user-name, .stat-val, lab
 
     <!-- 2. CÁMARA DE INSTRUCCIÓN POR GRADO -->
     <div id="tab-content-instruction" class="tab-panel">
-      <!-- SECCIÓN DESTACADA: SOLICITUDES DE REGISTRO PENDIENTES DE APROBACIÓN POR EL ADMINISTRADOR SUPREMO -->
-      <div class="glass-card" style="padding:24px; margin-bottom:24px; border:2px solid var(--gold-primary) !important; background:linear-gradient(135deg, rgba(212,175,55,0.15) 0%, rgba(6,17,38,0.85) 100%) !important;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
-          <div style="display:flex; align-items:center; gap:12px;">
-            <span style="font-size:24px; color:var(--gold-primary);">✉️</span>
-            <div>
-              <h4 style="color:var(--gold-primary); font-family:var(--font-title); font-size:17px; letter-spacing:0.8px; margin:0;">SOLICITUDES DE REGISTRO PENDIENTES DE APROBACIÓN</h4>
-              <p style="font-size:12px; color:var(--text-secondary); margin-top:2px;">Revisión de nuevos Hermanos solicitantes. El Administrador Supremo puede aprobar, rechazar o modificar el Grado asignado.</p>
-            </div>
-          </div>
-          <span id="badge-pending-total" style="background:var(--gold-primary); color:#050b14; font-weight:700; font-family:var(--font-title); font-size:11px; padding:4px 12px; border-radius:16px;">0 PENDIENTES</span>
-        </div>
-
-        <table class="table-custom">
-          <thead>
-            <tr>
-              <th>Hermano Solicitante</th>
-              <th>Correo Logial</th>
-              <th>Grado Solicitado</th>
-              <th>Fecha Solicitud</th>
-              <th>Acciones del Administrador Supremo</th>
-            </tr>
-          </thead>
-          <tbody id="admin-pending-approval-body">
-            <tr><td colspan="5" style="text-align:center; color:var(--text-secondary); padding:16px;">No hay solicitudes de registro pendientes en este momento.</td></tr>
-          </tbody>
-        </table>
-      </div>
-
       <div class="glass-card panel-header" style="padding:20px; margin-bottom:20px;">
         <h3 style="color:var(--gold-primary); font-family:var(--font-title); font-size:18px; letter-spacing:1px;">░ CÁMARA DE INSTRUCCIÓN POR GRADO</h3>
         <p style="color:var(--text-secondary); font-size:13px; font-family:var(--font-body);">Exclusivamente documentos subidos explícitamente como <strong>"Material de Estudio (Cámara de Instrucción)"</strong> en progresión para su grado iniciático.</p>
@@ -949,6 +920,35 @@ h1, h2, h3, h4, h5, .portico-title, .book-card-title, .user-name, .stat-val, lab
         <div class="glass-card" style="padding:18px; text-align:center;"><div style="font-size:22px; color:#68d391; font-weight:700;" id="admin-active-count">1</div><div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; margin-top:4px;">Hermanos Activos</div></div>
         <div class="glass-card" style="padding:18px; text-align:center;"><div style="font-size:22px; color:#9f7aea; font-weight:700;" id="admin-inst-req-count">0</div><div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; margin-top:4px;">Solicitudes Instrucción</div></div>
         <div class="glass-card" style="padding:18px; text-align:center;"><div style="font-size:22px; color:#63b3ed; font-weight:700;" id="admin-docs-count">0</div><div style="font-size:11px; color:var(--text-secondary); text-transform:uppercase; margin-top:4px;">Documentos Registrados</div></div>
+      </div>
+
+      <!-- SECCIÓN DESTACADA: SOLICITUDES DE REGISTRO PENDIENTES DE APROBACIÓN POR EL ADMINISTRADOR SUPREMO -->
+      <div class="glass-card" style="padding:24px; margin-bottom:24px; border:2px solid var(--gold-primary) !important; background:linear-gradient(135deg, rgba(212,175,55,0.15) 0%, rgba(6,17,38,0.85) 100%) !important;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+          <div style="display:flex; align-items:center; gap:12px;">
+            <span style="font-size:24px; color:var(--gold-primary);">✉️</span>
+            <div>
+              <h4 style="color:var(--gold-primary); font-family:var(--font-title); font-size:17px; letter-spacing:0.8px; margin:0;">SOLICITUDES DE REGISTRO PENDIENTES DE APROBACIÓN</h4>
+              <p style="font-size:12px; color:var(--text-secondary); margin-top:2px;">Revisión de nuevos Hermanos solicitantes. El Administrador Supremo puede aprobar, rechazar o modificar el Grado asignado.</p>
+            </div>
+          </div>
+          <span id="badge-pending-total" style="background:var(--gold-primary); color:#050b14; font-weight:700; font-family:var(--font-title); font-size:11px; padding:4px 12px; border-radius:16px;">0 PENDIENTES</span>
+        </div>
+
+        <table class="table-custom">
+          <thead>
+            <tr>
+              <th>Hermano Solicitante</th>
+              <th>Correo Logial</th>
+              <th>Grado Solicitado</th>
+              <th>Fecha Solicitud</th>
+              <th>Acciones del Administrador Supremo</th>
+            </tr>
+          </thead>
+          <tbody id="admin-pending-approval-body">
+            <tr><td colspan="5" style="text-align:center; color:var(--text-secondary); padding:16px;">No hay solicitudes de registro pendientes en este momento.</td></tr>
+          </tbody>
+        </table>
       </div>
 
       <!-- MÓDULO: ADMINISTRADOR DE USO DE DATOS -->
@@ -2534,10 +2534,16 @@ window.renderizarAdminTabla = function() {
       const tr = document.createElement("tr");
       let actionsHTML = '';
       if (isSupreme && u.email !== ADMIN_SUPREMO_EMAIL) {
-        if (u.rol === 'Administrador') {
-          actionsHTML += '<button class="masonic-btn" style="padding:4px 8px; font-size:10px; background:rgba(229,62,62,0.3); border:1px solid #e53e3e; color:#fc8181;" onclick="window.revocarRolAdministrador(\'' + u.email + '\')">🔻 Revocar Admin</button>';
+        if (u.estado === 'Pendiente') {
+          actionsHTML = '<div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">' +
+            '<button class="masonic-btn gold-glow" style="padding:4px 8px; font-size:10px;" onclick="window.aprobarSolicitudRegistro(\'' + u.email + '\')">✅ APROBAR</button>' +
+            '<button class="masonic-btn" style="padding:4px 8px; font-size:10px; background:rgba(229,62,62,0.3); border:1px solid #e53e3e; color:#fc8181;" onclick="window.rechazarSolicitudRegistro(\'' + u.email + '\')">❌ RECHAZAR</button>' +
+            '<button class="masonic-btn" style="padding:4px 8px; font-size:10px; background:rgba(49,130,206,0.3); border:1px solid #3182ce; color:#63b3ed;" onclick="window.modificarGradoSolicitante(\'' + u.email + '\')">✏️ GRADO</button>' +
+            '</div>';
+        } else if (u.rol === 'Administrador') {
+          actionsHTML = '<button class="masonic-btn" style="padding:4px 8px; font-size:10px; background:rgba(229,62,62,0.3); border:1px solid #e53e3e; color:#fc8181;" onclick="window.revocarRolAdministrador(\'' + u.email + '\')">🔻 Revocar Admin</button>';
         } else {
-          actionsHTML += '<button class="masonic-btn gold-glow" style="padding:4px 8px; font-size:10px;" onclick="window.otorgarRolAdministrador(\'' + u.email + '\')">⭐ Otorgar Admin</button>';
+          actionsHTML = '<button class="masonic-btn gold-glow" style="padding:4px 8px; font-size:10px;" onclick="window.otorgarRolAdministrador(\'' + u.email + '\')">⭐ Otorgar Admin</button>';
         }
       } else {
         actionsHTML = '<span style="font-size:10px; color:var(--text-secondary);">Sin acciones</span>';
