@@ -55,17 +55,13 @@ function getSpreadsheet() {
 }
 
 function obtenerCarpetaDestino() {
+  if (!TARGET_DRIVE_FOLDER_ID) {
+    throw new Error("TARGET_DRIVE_FOLDER_ID no está configurado en el código.");
+  }
   try {
     return DriveApp.getFolderById(TARGET_DRIVE_FOLDER_ID);
   } catch(e) {
-    var carpetas = DriveApp.getFoldersByName("Biblioteca Virtual GOSCH");
-    if (carpetas.hasNext()) {
-      return carpetas.next();
-    } else {
-      var nueva = DriveApp.createFolder("Biblioteca Virtual GOSCH");
-      nueva.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      return nueva;
-    }
+    throw new Error("No se pudo acceder a la carpeta de libros (ID: " + TARGET_DRIVE_FOLDER_ID + "). Verifica que el ID sea correcto y que la Service Account tenga acceso.");
   }
 }
 
@@ -749,11 +745,6 @@ function obtenerLibros(email) {
       return { success: false, message: "Sesión no válida o no autorizada." };
     }
 
-    // Auto-sincronizar archivos de Google Drive a Google Sheets de forma transparente
-    try {
-      sincronizarLibrosConDrive();
-    } catch(eSync) {}
-    
     var ss = getSpreadsheet();
     
     // 1. Obtener grado del usuario
@@ -778,21 +769,50 @@ function obtenerLibros(email) {
     var headers = data[0];
     var colMap = obtenerMapaColumnasLibros(headers);
     var libros = [];
+    var driveIdCache = {};
+    var invalidRowIndices = [];
 
     for (var r = 1; r < data.length; r++) {
       var row = data[r];
       if (!row[colMap.titulo]) continue;
 
-      // Excluir archivos que no sean libros reales (Google Sheets, enlaces, etc.)
       var formatoLibro = row[colMap.formato] ? row[colMap.formato].toString().trim().toUpperCase() : "";
       var allowedFormats = ["PDF", "EPUB", "DOC", "DOCX"];
-      if (formatoLibro !== "" && allowedFormats.indexOf(formatoLibro) === -1) continue;
+      if (allowedFormats.indexOf(formatoLibro) === -1) {
+        invalidRowIndices.push(r + 1);
+        continue;
+      }
+
+      var fileId = row[colMap.driveId] ? row[colMap.driveId].toString().trim() : "";
+      if (!fileId) {
+        invalidRowIndices.push(r + 1);
+        continue;
+      }
+
+      if (driveIdCache[fileId] === undefined) {
+        try {
+          var driveFile = DriveApp.getFileById(fileId);
+          var mime = driveFile.getMimeType();
+          var allowedMimes = [
+            "application/pdf",
+            "application/epub+zip",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          ];
+          driveIdCache[fileId] = allowedMimes.indexOf(mime) !== -1;
+        } catch(eFile) {
+          driveIdCache[fileId] = false;
+        }
+      }
+      if (!driveIdCache[fileId]) {
+        invalidRowIndices.push(r + 1);
+        continue;
+      }
 
       var gradoReq = parseInt(row[colMap.grado]) || 1;
       if (gradoReq <= userGrade || emailLower === "diaz.patricio.pdp@gmail.com") {
-        var fileId = row[colMap.driveId] ? row[colMap.driveId].toString().trim() : "";
-        var previewUrl = row[colMap.preview] ? row[colMap.preview].toString().trim() : (fileId ? "https://drive.google.com/file/d/" + fileId + "/preview" : null);
-        var downloadUrl = row[colMap.download] ? row[colMap.download].toString().trim() : (fileId ? "https://drive.google.com/uc?export=download&id=" + fileId : null);
+        var previewUrl = row[colMap.preview] ? row[colMap.preview].toString().trim() : "https://drive.google.com/file/d/" + fileId + "/preview";
+        var downloadUrl = row[colMap.download] ? row[colMap.download].toString().trim() : "https://drive.google.com/uc?export=download&id=" + fileId;
 
         libros.push({
           id: row[colMap.id] ? row[colMap.id].toString().trim() : "LIB-" + r,
@@ -809,6 +829,12 @@ function obtenerLibros(email) {
           tipo: row[colMap.tipo] ? row[colMap.tipo].toString().trim() : "Obra / Bibliografía General",
           fechaSubida: row[colMap.fecha] ? row[colMap.fecha].toString() : ""
         });
+      }
+    }
+
+    if (invalidRowIndices.length > 0) {
+      for (var j = invalidRowIndices.length - 1; j >= 0; j--) {
+        sheet.deleteRow(invalidRowIndices[j]);
       }
     }
 
