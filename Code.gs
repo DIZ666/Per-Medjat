@@ -43,7 +43,7 @@ function obtenerMapaColumnasLibros(headers) {
 
 
 var TARGET_SPREADSHEET_ID = "16c9tIKBftKQmoxct2m4s54oXeYpKiqjEFJker1FbsZE";
-var TARGET_DRIVE_FOLDER_ID = "1fQs125ObjXrZynPVkEIK0a1cRWYapuLG";
+var TARGET_DRIVE_FOLDER_ID = "1x14KtMSvfKV90ZeQSSx1lgUXrWn0NxHH";
 
 function getSpreadsheet() {
   try {
@@ -851,7 +851,7 @@ function subirLibro(fileData, fileName, fileType, titulo, autor, categoria, form
       return { success: false, message: "Sesión no válida o no autorizada." };
     }
     
-    // 1. Obtener carpeta de destino estricta en Google Drive (ID: 1fQs125ObjXrZynPVkEIK0a1cRWYapuLG)
+    // 1. Obtener carpeta de destino estricta en Google Drive (ID: 1x14KtMSvfKV90ZeQSSx1lgUXrWn0NxHH - solo libros)
     var folder = obtenerCarpetaDestino();
     
     // 2. Decodificar archivo Base64
