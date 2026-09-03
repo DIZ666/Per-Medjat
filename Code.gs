@@ -285,7 +285,7 @@ function sincronizarLibrosConDrive() {
         var titulo = dotIdx !== -1 ? fileName.substring(0, dotIdx) : fileName;
         var extension = dotIdx !== -1 ? fileName.substring(dotIdx + 1).toUpperCase() : "PDF";
         
-        // Solo registrar archivos que sean libros reales (PDF, EPUB, DOC, DOCX)
+        // Solo registrar archivos que sean libros reales — verificar MIME type de Drive
         var mimeType = file.getMimeType();
         var allowedMimeTypes = [
           "application/pdf",
@@ -293,8 +293,7 @@ function sincronizarLibrosConDrive() {
           "application/msword",
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         ];
-        var allowedExtensions = ["PDF", "EPUB", "DOC", "DOCX"];
-        if (allowedMimeTypes.indexOf(mimeType) === -1 && allowedExtensions.indexOf(extension) === -1) continue;
+        if (allowedMimeTypes.indexOf(mimeType) === -1) continue;
         
         var autor = "Autor no especificado";
         if (titulo.indexOf(" - ") !== -1) {
@@ -2099,20 +2098,20 @@ function limpiarLibrosNoValidos(email) {
 
     for (var i = 1; i < data.length; i++) {
       var row = data[i];
-      var formato = row[colMap.formato] ? row[colMap.formato].toString().trim().toUpperCase() : "";
       var driveId = row[colMap.driveId] ? row[colMap.driveId].toString().trim() : "";
-
       var esValido = false;
-      if (allowedFormats.indexOf(formato) !== -1) {
-        esValido = true;
-      } else if (driveId) {
+
+      if (driveId) {
         try {
           var file = DriveApp.getFileById(driveId);
           var mime = file.getMimeType();
-          if (mime === "application/pdf" || mime === "application/epub+zip" ||
-              mime === "application/msword" || mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
-            esValido = true;
-          }
+          var allowedMimeTypes = [
+            "application/pdf",
+            "application/epub+zip",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          ];
+          if (allowedMimeTypes.indexOf(mime) !== -1) esValido = true;
         } catch(eFile) {}
       }
 
