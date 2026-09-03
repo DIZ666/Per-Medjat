@@ -167,6 +167,8 @@ function manejarPeticionApi(action, params) {
       resultado = actualizarGradoMiembro(email, params.miembroEmail, params.nuevoGrado);
     } else if (action === "updateMemberRole") {
       resultado = actualizarRolMiembro(email, params.miembroEmail, params.nuevoRol);
+    } else if (action === "cleanBooks") {
+      resultado = limpiarLibrosNoValidos(email);
     }
   } catch (eApi) {
     resultado = { success: false, message: "Error en API: " + eApi.message };
@@ -283,9 +285,16 @@ function sincronizarLibrosConDrive() {
         var titulo = dotIdx !== -1 ? fileName.substring(0, dotIdx) : fileName;
         var extension = dotIdx !== -1 ? fileName.substring(dotIdx + 1).toUpperCase() : "PDF";
         
-        // Solo registrar archivos que sean libros (PDF, EPUB, DOC, DOCX)
+        // Solo registrar archivos que sean libros reales (PDF, EPUB, DOC, DOCX)
+        var mimeType = file.getMimeType();
+        var allowedMimeTypes = [
+          "application/pdf",
+          "application/epub+zip",
+          "application/msword",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ];
         var allowedExtensions = ["PDF", "EPUB", "DOC", "DOCX"];
-        if (allowedExtensions.indexOf(extension) === -1) continue;
+        if (allowedMimeTypes.indexOf(mimeType) === -1 && allowedExtensions.indexOf(extension) === -1) continue;
         
         var autor = "Autor no especificado";
         if (titulo.indexOf(" - ") !== -1) {
@@ -774,6 +783,11 @@ function obtenerLibros(email) {
     for (var r = 1; r < data.length; r++) {
       var row = data[r];
       if (!row[colMap.titulo]) continue;
+
+      // Excluir archivos que no sean libros reales (Google Sheets, enlaces, etc.)
+      var formatoLibro = row[colMap.formato] ? row[colMap.formato].toString().trim().toUpperCase() : "";
+      var allowedFormats = ["PDF", "EPUB", "DOC", "DOCX"];
+      if (formatoLibro !== "" && allowedFormats.indexOf(formatoLibro) === -1) continue;
 
       var gradoReq = parseInt(row[colMap.grado]) || 1;
       if (gradoReq <= userGrade || emailLower === "diaz.patricio.pdp@gmail.com") {
@@ -2060,5 +2074,61 @@ function publicarNoticiaOrden(email, noticia) {
     return { success: true, message: "Noticia publicada exitosamente en Google Sheets." };
   } catch (e) {
     return { success: false, message: "Error al guardar noticia: " + e.message };
+  }
+}
+
+/**
+ * Elimina de la hoja Libros todos los registros que no sean libros reales
+ * (Google Sheets, enlaces, Docs, etc.) — usar una sola vez para limpiar datos existentes.
+ */
+function limpiarLibrosNoValidos(email) {
+  try {
+    if (!validarSesion(email) || !verificarEsAdmin(email)) {
+      return { success: false, message: "Acceso denegado." };
+    }
+    var ss = getSpreadsheet();
+    var sheet = ss.getSheetByName("Libros");
+    if (!sheet) return { success: false, message: "Hoja Libros no encontrada." };
+
+    var data = sheet.getDataRange().getValues();
+    var headers = data[0];
+    var colMap = obtenerMapaColumnasLibros(headers);
+    var allowedFormats = ["PDF", "EPUB", "DOC", "DOCX"];
+    var eliminados = 0;
+    var rowsToDelete = [];
+
+    for (var i = 1; i < data.length; i++) {
+      var row = data[i];
+      var formato = row[colMap.formato] ? row[colMap.formato].toString().trim().toUpperCase() : "";
+      var driveId = row[colMap.driveId] ? row[colMap.driveId].toString().trim() : "";
+
+      var esValido = false;
+      if (allowedFormats.indexOf(formato) !== -1) {
+        esValido = true;
+      } else if (driveId) {
+        try {
+          var file = DriveApp.getFileById(driveId);
+          var mime = file.getMimeType();
+          if (mime === "application/pdf" || mime === "application/epub+zip" ||
+              mime === "application/msword" || mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+            esValido = true;
+          }
+        } catch(eFile) {}
+      }
+
+      if (!esValido) {
+        rowsToDelete.push(i + 1);
+        eliminados++;
+      }
+    }
+
+    // Eliminar de abajo hacia arriba para no desfilar índices
+    for (var j = rowsToDelete.length - 1; j >= 0; j--) {
+      sheet.deleteRow(rowsToDelete[j]);
+    }
+
+    return { success: true, message: eliminados + " registro(s) no-libro eliminado(s) de la hoja Libros." };
+  } catch (e) {
+    return { success: false, message: "Error al limpiar: " + e.message };
   }
 }
